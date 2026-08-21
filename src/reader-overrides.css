@@ -1,0 +1,13 @@
+/* Reader-specific layout overrides.
+   Keep the EPUB viewport below epub.js' automatic spread threshold so a
+   desktop window still renders as a single book page instead of a two-page spread. */
+
+.paper {
+  width: min(700px, 100%);
+}
+
+@media (max-width: 900px) {
+  .paper {
+    width: 100%;
+  }
+}
