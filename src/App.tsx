@@ -208,7 +208,7 @@ function App() {
   }, [currentBooks, query]);
 
   const currentlyReading = useMemo(() => library
-    .filter((book) => Boolean(book.lastOpenedAt) && (book.progress ?? 0) < 0.999)
+    .filter((book) => Boolean(book.lastOpenedAt) && (book.progress ?? 0) >= .01 && (book.progress ?? 0) < .999)
     .sort((a, b) => Number(b.lastOpenedAt || 0) - Number(a.lastOpenedAt || 0))
     .slice(0, 5), [library]);
 
@@ -234,7 +234,13 @@ function App() {
       const imports: PendingImport[] = [];
       for (const file of files) {
         const metadata = await readEpubMetadata(file);
-        imports.push({ file, title: metadata.title, author: metadata.author, cover: metadata.cover, description: '' });
+        imports.push({
+          file,
+          title: metadata.title,
+          author: metadata.author,
+          cover: metadata.cover,
+          description: metadata.description ?? '',
+        });
       }
       setPendingImports(imports);
     } catch (cause) {
