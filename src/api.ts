@@ -8,6 +8,7 @@ export type LibraryBook = {
   id: string;
   title: string;
   author: string;
+  description: string;
   fileName: string;
   hasCover: boolean;
   visibility: 'private' | 'public';
@@ -87,8 +88,13 @@ export async function getShares(): Promise<LibraryBook[]> {
   return (await request<{ books: LibraryBook[] }>('/api/shares')).books;
 }
 
-export async function uploadBook(file: File, metadata: { title: string; author: string; cover?: string }): Promise<LibraryBook> {
-  const params = new URLSearchParams({ title: metadata.title, author: metadata.author, fileName: file.name });
+export async function uploadBook(file: File, metadata: { title: string; author: string; description?: string; cover?: string }): Promise<LibraryBook> {
+  const params = new URLSearchParams({
+    title: metadata.title,
+    author: metadata.author,
+    description: metadata.description ?? '',
+    fileName: file.name,
+  });
   const response = await request<{ book: LibraryBook }>(`/api/library/upload?${params}`, {
     method: 'POST',
     body: file,
