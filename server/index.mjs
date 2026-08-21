@@ -278,8 +278,13 @@ const server = createServer(async (req, res) => {
       const bookId = decodeURIComponent(match[1]);
       if (!canEditAsset(user.id, bookId)) return sendError(res, 403, 'Solo quien subió originalmente el libro puede editar sus datos.');
       const body = await readJson(req);
+      const title = String(body.title ?? '').trim().slice(0, 300);
+      const author = String(body.author ?? '').trim().slice(0, 300);
       const description = String(body.description ?? '').trim().slice(0, 5000);
-      db.prepare('UPDATE book_assets SET description = ? WHERE id = ?').run(description, bookId);
+      if (!title) return sendError(res, 400, 'El título no puede quedar vacío.');
+      if (!author) return sendError(res, 400, 'El autor no puede quedar vacío.');
+      db.prepare('UPDATE book_assets SET title = ?, author = ?, description = ? WHERE id = ?')
+        .run(title, author, description, bookId);
       return sendJson(res, 200, { book: libraryBook(user.id, bookId) });
     }
 
