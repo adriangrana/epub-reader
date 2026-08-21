@@ -1,0 +1,26 @@
+/* Keep book covers clean: no bright artificial spine line over artwork. */
+.cover {
+  box-shadow:
+    0 18px 35px rgba(0, 0, 0, .32),
+    inset 1px 0 rgba(0, 0, 0, .22);
+}
+
+.cover::after {
+  display: none;
+}
+
+.cover-button:hover .cover {
+  box-shadow:
+    0 28px 46px rgba(0, 0, 0, .42),
+    inset 1px 0 rgba(0, 0, 0, .22);
+}
+
+.detail-cover {
+  box-shadow:
+    0 30px 70px rgba(0, 0, 0, .42),
+    inset 1px 0 rgba(0, 0, 0, .22);
+}
+
+.detail-cover::after {
+  display: none;
+}
