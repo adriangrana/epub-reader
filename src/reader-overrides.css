@@ -25,6 +25,31 @@
   width: min(700px, 100%);
 }
 
+/* Keep the table of contents synchronized with the rendered EPUB spine item. */
+.toc-list button.active,
+.toc-list button[aria-current='location'] {
+  position: relative;
+  color: #f0edff;
+  border-left-color: #8c6cff;
+  background: linear-gradient(90deg, rgba(140, 108, 255, .18), rgba(140, 108, 255, .035));
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(140, 108, 255, .035);
+}
+
+.toc-list button.active::after,
+.toc-list button[aria-current='location']::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: #9d87ff;
+  box-shadow: 0 0 12px rgba(157, 135, 255, .8);
+}
+
 /* The browser-native voice select used to inherit a very wide flexible grid
    column. On Windows that also made the opened options panel almost full-width.
    Keep the controls intentionally compact and give the closed selects the same
@@ -201,5 +226,12 @@
 
   .narration-choice {
     padding: 28px 22px 22px;
+  }
+
+  /* The EPUB iframe receives the touch listeners directly; pan-y keeps
+     ordinary vertical gestures available while horizontal swipes turn pages. */
+  .epub-viewer,
+  .epub-viewer iframe {
+    touch-action: pan-y;
   }
 }
