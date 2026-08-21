@@ -83,6 +83,10 @@ SQLite mantiene separadas las siguientes responsabilidades:
 
 Un mismo `book_asset` puede aparecer en varias bibliotecas sin duplicar el archivo `.epub`.
 
+## Migración desde la versión IndexedDB
+
+La versión multiusuario deja de usar IndexedDB como fuente de la biblioteca. Los EPUB que hayas cargado con la versión anterior siguen dentro del almacenamiento del navegador, pero **no se migran automáticamente todavía**. Vuelve a subirlos una vez después de crear tu cuenta para que queden guardados físicamente en `data/books/`.
+
 ## Privacidad y despliegue
 
 En desarrollo los archivos permanecen en el PC que ejecuta el servidor Luma. Si varias personas acceden al mismo servidor, cada una ve únicamente su biblioteca, los libros públicos y los libros compartidos con ella.
