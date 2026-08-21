@@ -1,0 +1,107 @@
+/* Responsive library header/tooling. Prevent actions and counters from escaping
+   the available content column at intermediate desktop/tablet widths. */
+
+.library,
+.library-header,
+.library-tools {
+  min-width: 0;
+}
+
+.library-header,
+.library-tools {
+  width: 100%;
+}
+
+.library-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.library-header > div {
+  min-width: 0;
+}
+
+.library-header > .primary-button {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.library-tools {
+  flex-wrap: wrap;
+}
+
+.library-tools .search-box {
+  min-width: 0;
+  flex: 0 1 460px;
+}
+
+.library-tools > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* The sidebar is still visible here, so the usable content width is much
+   smaller than the viewport. Reflow before the mobile breakpoint. */
+@media (max-width: 1180px) {
+  .library-header {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .library-header > .primary-button {
+    justify-self: start;
+  }
+
+  .library-tools {
+    justify-content: flex-start;
+    align-items: center;
+  }
+
+  .library-tools .search-box {
+    flex: 1 1 420px;
+    width: auto;
+  }
+
+  .library-tools > span {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 1020px) {
+  .library-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+  }
+
+  .library-tools .search-box {
+    width: 100%;
+    max-width: none;
+  }
+
+  .library-tools > span {
+    margin-left: 0;
+    justify-self: end;
+  }
+}
+
+@media (max-width: 900px) {
+  .library-header > .primary-button {
+    width: auto;
+    justify-self: start;
+  }
+}
+
+@media (max-width: 560px) {
+  .library-header > .primary-button {
+    width: 100%;
+  }
+
+  .library-tools {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .library-tools > span {
+    justify-self: start;
+  }
+}
