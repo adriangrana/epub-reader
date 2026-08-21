@@ -17,8 +17,25 @@ function Require-Command([string]$Name) {
 }
 
 function Test-RunaraProcess([string]$Name, [string]$RunaraCommand) {
-  & $RunaraCommand info $Name *> $null
-  return $LASTEXITCODE -eq 0
+  # Algunas versiones de Runara imprimen "Process not found" pero mantienen
+  # exit code 0 para `info`. Por eso no podemos usar solo $LASTEXITCODE.
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output = (& $RunaraCommand info $Name 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  if ($output -match '(?i)process\s+["'']?.+?["'']?\s+not\s+found' -or
+      $output -match '(?i)process.*not found' -or
+      $output -match '(?i)failed to .*process' -or
+      $output -match '\[ERR\]') {
+    return $false
+  }
+
+  return $exitCode -eq 0
 }
 
 function Ensure-RunaraDaemon([string]$RunaraCommand) {
@@ -32,6 +49,12 @@ function Ensure-RunaraDaemon([string]$RunaraCommand) {
   }
 }
 
+function Create-AppProcess([string]$RunaraCommand, [string]$Command) {
+  Write-Host "Creando proceso Runara '$AppProcess'..."
+  & $RunaraCommand run $Command --name $AppProcess --cwd $DeployDir --max-restarts 20 --restart-delay 2000 --min-uptime 2000 --autostart
+  if ($LASTEXITCODE -ne 0) { throw "No se pudo crear '$AppProcess'." }
+}
+
 function Upsert-AppProcess([string]$RunaraCommand) {
   # Runara persiste el comando como texto y luego lo ejecuta mediante shell.
   # Usamos el nombre disponible en PATH en lugar de la ruta absoluta de node
@@ -39,19 +62,37 @@ function Upsert-AppProcess([string]$RunaraCommand) {
   # pasar por el parser CLI de Runara.
   $command = 'node server/index.mjs'
 
-  if (Test-RunaraProcess $AppProcess $RunaraCommand) {
-    Write-Host "Actualizando proceso Runara '$AppProcess'..."
-    & $RunaraCommand set $AppProcess --command $command --cwd $DeployDir --max-restarts 20 --restart-delay 2000 --min-uptime 2000 --autorestart --autostart
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo actualizar '$AppProcess'." }
-
-    & $RunaraCommand restart $AppProcess
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo reiniciar '$AppProcess'." }
+  if (-not (Test-RunaraProcess $AppProcess $RunaraCommand)) {
+    Create-AppProcess $RunaraCommand $command
     return
   }
 
-  Write-Host "Creando proceso Runara '$AppProcess'..."
-  & $RunaraCommand run $command --name $AppProcess --cwd $DeployDir --max-restarts 20 --restart-delay 2000 --min-uptime 2000 --autostart
-  if ($LASTEXITCODE -ne 0) { throw "No se pudo crear '$AppProcess'." }
+  Write-Host "Actualizando proceso Runara '$AppProcess'..."
+  & $RunaraCommand set $AppProcess --command $command --cwd $DeployDir --max-restarts 20 --restart-delay 2000 --min-uptime 2000 --autorestart --autostart
+  if ($LASTEXITCODE -ne 0) {
+    # El proceso puede desaparecer entre `info` y `set` si el daemon estaba
+    # reconciliando el registro. Volvemos a comprobar y lo creamos si procede.
+    if (-not (Test-RunaraProcess $AppProcess $RunaraCommand)) {
+      Create-AppProcess $RunaraCommand $command
+      return
+    }
+    throw "No se pudo actualizar '$AppProcess'."
+  }
+
+  & $RunaraCommand restart $AppProcess
+  if ($LASTEXITCODE -ne 0) {
+    if (-not (Test-RunaraProcess $AppProcess $RunaraCommand)) {
+      Create-AppProcess $RunaraCommand $command
+      return
+    }
+    throw "No se pudo reiniciar '$AppProcess'."
+  }
+}
+
+function Create-TunnelProcess([string]$RunaraCommand, [string]$Command) {
+  Write-Host "Creando Quick Tunnel de Cloudflare en Runara ('$TunnelProcess')..."
+  & $RunaraCommand run $Command --name $TunnelProcess --cwd $DeployDir --max-restarts 20 --restart-delay 3000 --min-uptime 3000 --autostart
+  if ($LASTEXITCODE -ne 0) { throw "No se pudo crear '$TunnelProcess'." }
 }
 
 function Ensure-TunnelProcess([string]$RunaraCommand) {
@@ -59,20 +100,24 @@ function Ensure-TunnelProcess([string]$RunaraCommand) {
   # guardamos su ruta absoluta dentro del comando persistido por Runara.
   $command = "cloudflared tunnel --no-autoupdate --url http://127.0.0.1:$Port"
 
-  if (Test-RunaraProcess $TunnelProcess $RunaraCommand) {
-    Write-Host "El proceso '$TunnelProcess' ya existe. Se conserva para no cambiar innecesariamente la URL temporal."
-    & $RunaraCommand set $TunnelProcess --command $command --cwd $DeployDir --max-restarts 20 --restart-delay 3000 --min-uptime 3000 --autorestart --autostart
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo actualizar '$TunnelProcess'." }
-
-    # start es intencionadamente preferible a restart: si ya esta ejecutandose,
-    # mantenemos el Quick Tunnel existente y por tanto su URL actual.
-    & $RunaraCommand start $TunnelProcess *> $null
+  if (-not (Test-RunaraProcess $TunnelProcess $RunaraCommand)) {
+    Create-TunnelProcess $RunaraCommand $command
     return
   }
 
-  Write-Host "Creando Quick Tunnel de Cloudflare en Runara ('$TunnelProcess')..."
-  & $RunaraCommand run $command --name $TunnelProcess --cwd $DeployDir --max-restarts 20 --restart-delay 3000 --min-uptime 3000 --autostart
-  if ($LASTEXITCODE -ne 0) { throw "No se pudo crear '$TunnelProcess'." }
+  Write-Host "El proceso '$TunnelProcess' ya existe. Se conserva para no cambiar innecesariamente la URL temporal."
+  & $RunaraCommand set $TunnelProcess --command $command --cwd $DeployDir --max-restarts 20 --restart-delay 3000 --min-uptime 3000 --autorestart --autostart
+  if ($LASTEXITCODE -ne 0) {
+    if (-not (Test-RunaraProcess $TunnelProcess $RunaraCommand)) {
+      Create-TunnelProcess $RunaraCommand $command
+      return
+    }
+    throw "No se pudo actualizar '$TunnelProcess'."
+  }
+
+  # start es intencionadamente preferible a restart: si ya esta ejecutandose,
+  # mantenemos el Quick Tunnel existente y por tanto su URL actual.
+  & $RunaraCommand start $TunnelProcess *> $null
 }
 
 $runara = Require-Command 'runara'
