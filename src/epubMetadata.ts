@@ -3,6 +3,7 @@ import ePub from 'epubjs';
 export type EpubMetadata = {
   title: string;
   author: string;
+  description?: string;
   cover?: string;
 };
 
@@ -13,6 +14,13 @@ function toDataUrl(blob: Blob): Promise<string> {
     reader.onload = () => resolve(String(reader.result));
     reader.readAsDataURL(blob);
   });
+}
+
+function cleanDescription(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const container = document.createElement('div');
+  container.innerHTML = value;
+  return (container.textContent || container.innerText || '').replace(/\s+/g, ' ').trim();
 }
 
 export async function readEpubMetadata(file: File): Promise<EpubMetadata> {
@@ -33,6 +41,7 @@ export async function readEpubMetadata(file: File): Promise<EpubMetadata> {
     return {
       title: metadata.title?.trim() || file.name.replace(/\.epub$/i, ''),
       author: metadata.creator?.trim() || 'Autor desconocido',
+      description: cleanDescription((metadata as { description?: unknown }).description),
       cover,
     };
   } finally {
