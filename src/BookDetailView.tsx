@@ -8,6 +8,7 @@ import {
   updateBookMetadata, updateProgress,
 } from './api';
 import { readEpubMetadata } from './epubMetadata';
+import MarkdownText from './MarkdownText';
 
 export type BookContext = 'library' | 'public' | 'shared';
 
@@ -271,12 +272,13 @@ export default function BookDetailView({
                   />
                 </label>
                 <label style={{ color: '#8d97b1', fontSize: 10, fontWeight: 600 }}>
-                  Descripción
+                  Descripción (admite Markdown)
                   <textarea
                     value={descriptionDraft}
                     onChange={(event) => setDescriptionDraft(event.target.value.slice(0, 5000))}
                     maxLength={5000}
                     style={editorStyle}
+                    placeholder={'Ej. **Una historia olvidada.**\n\n> Algunas puertas no deberían abrirse.'}
                   />
                 </label>
                 <div className="detail-library-actions" style={{ marginTop: 0 }}>
@@ -289,8 +291,10 @@ export default function BookDetailView({
                   <span style={{ marginLeft: 'auto', alignSelf: 'center', color: '#68738d', fontSize: 9 }}>{descriptionDraft.length}/5000</span>
                 </div>
               </div>
+            ) : currentBook.description?.trim() ? (
+              <MarkdownText text={currentBook.description} />
             ) : (
-              <p>{currentBook.description?.trim() || 'Este libro todavía no tiene una descripción.'}</p>
+              <p>Este libro todavía no tiene una descripción.</p>
             )}
           </div>
 
