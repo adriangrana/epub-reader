@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ePub, { Book, Rendition } from 'epubjs';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, CirclePause, CirclePlay, Headphones,
-  LoaderCircle, Menu, Sparkles, X,
+  ArrowLeft, BookOpenCheck, ChevronLeft, ChevronRight, CirclePause, CirclePlay, Headphones,
+  LoaderCircle, MapPin, Menu, Sparkles, X,
 } from 'lucide-react';
-import { fetchBookData, LibraryBook, updateProgress } from './api';
-import { splitForSpeech } from './speech';
+import { fetchBookData, getCurrentUser, LibraryBook, updateProgress } from './api';
+import { SpeechSegment, splitSpeechSegments } from './speech';
 
 type TocItem = { label?: string; href: string; subitems?: TocItem[] };
+type NarrationCheckpoint = { cfi: string; offset: number; updatedAt: number };
+type SpeechToken = { start: number; end: number; range: Range; document: Document };
+type SpeechPage = { text: string; tokens: SpeechToken[] };
 
 type Props = {
   record: LibraryBook;
@@ -22,13 +25,141 @@ function flattenToc(items: TocItem[], depth = 0): Array<TocItem & { depth: numbe
   ]);
 }
 
+function delay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForPagePaint() {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  await delay(45);
+}
+
+function currentCfi(rendition: Rendition | null): string {
+  if (!rendition) return '';
+  try {
+    const location = rendition.currentLocation() as { start?: { cfi?: string } } | undefined;
+    return location?.start?.cfi ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function rangeIsVisible(range: Range, width: number, height: number) {
+  return Array.from(range.getClientRects()).some((rect) => (
+    rect.width > 0 && rect.height > 0
+    && rect.right > 0 && rect.left < width
+    && rect.bottom > 0 && rect.top < height
+  ));
+}
+
+function visibleSpeechPage(rendition: Rendition): SpeechPage {
+  const tokens: SpeechToken[] = [];
+  let text = '';
+
+  for (const content of rendition.getContents()) {
+    const document = content.document;
+    const root = document.body;
+    const view = document.defaultView;
+    if (!root || !view) continue;
+
+    const width = view.innerWidth || document.documentElement.clientWidth;
+    const height = view.innerHeight || document.documentElement.clientHeight;
+    const walker = document.createTreeWalker(root, 4);
+    let node = walker.nextNode() as Text | null;
+
+    while (node) {
+      const parent = node.parentElement;
+      if (parent && !parent.closest('script, style, noscript')) {
+        const source = node.data;
+        for (const match of source.matchAll(/\S+/g)) {
+          const localStart = match.index ?? 0;
+          const localEnd = localStart + match[0].length;
+          const range = document.createRange();
+          range.setStart(node, localStart);
+          range.setEnd(node, localEnd);
+          if (!rangeIsVisible(range, width, height)) continue;
+
+          if (text) text += ' ';
+          const start = text.length;
+          text += match[0];
+          tokens.push({ start, end: text.length, range, document });
+        }
+      }
+      node = walker.nextNode() as Text | null;
+    }
+  }
+
+  return { text, tokens };
+}
+
+function ensureHighlightStyle(document: Document) {
+  if (document.querySelector('style[data-luma-narration]')) return;
+  const style = document.createElement('style');
+  style.dataset.lumaNarration = 'true';
+  style.textContent = `
+    ::highlight(luma-narration) {
+      background: rgba(140, 108, 255, .34);
+      color: inherit;
+      text-decoration: underline;
+      text-decoration-color: rgba(104, 74, 235, .65);
+      text-decoration-thickness: 2px;
+      text-underline-offset: 3px;
+    }
+  `;
+  document.head?.appendChild(style);
+}
+
+function clearSpeechHighlight(page: SpeechPage | null) {
+  if (!page) return;
+  for (const document of new Set(page.tokens.map((token) => token.document))) {
+    const view = document.defaultView as (Window & { CSS?: { highlights?: Map<string, unknown> } }) | null;
+    try { view?.CSS?.highlights?.delete('luma-narration'); } catch { /* optional API */ }
+    try { view?.getSelection()?.removeAllRanges(); } catch { /* fallback cleanup */ }
+  }
+}
+
+function highlightSpeechOffset(page: SpeechPage, offset: number) {
+  const token = page.tokens.find((candidate) => offset >= candidate.start && offset < candidate.end)
+    ?? [...page.tokens].reverse().find((candidate) => candidate.start <= offset)
+    ?? page.tokens[0];
+  if (!token) return;
+
+  ensureHighlightStyle(token.document);
+  const view = token.document.defaultView as (Window & {
+    CSS?: { highlights?: Map<string, unknown> };
+    Highlight?: new (...ranges: Range[]) => unknown;
+  }) | null;
+
+  try {
+    if (view?.CSS?.highlights && view.Highlight) {
+      view.CSS.highlights.set('luma-narration', new view.Highlight(token.range));
+      return;
+    }
+  } catch { /* use selection fallback */ }
+
+  try {
+    const selection = view?.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(token.range);
+  } catch { /* highlighting is optional */ }
+}
+
 export default function ReaderView({ record, onClose, onProgress }: Props) {
   const viewerRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<Book | null>(null);
   const renditionRef = useRef<Rendition | null>(null);
-  const speechQueueRef = useRef<string[]>([]);
-  const speechIndexRef = useRef(0);
-  const progressRef = useRef(record.progress ?? 0);
+  const currentPageCfiRef = useRef('');
+  const speechPageRef = useRef<SpeechPage | null>(null);
+  const speechSegmentsRef = useRef<SpeechSegment[]>([]);
+  const speechSegmentIndexRef = useRef(0);
+  const speechOffsetRef = useRef(0);
+  const speechRunRef = useRef(0);
+  const speakingRef = useRef(false);
+  const checkpointKeyRef = useRef<string | null>(null);
+  const lastCheckpointWriteRef = useRef(0);
+  const autoAdvanceRef = useRef<(runId: number) => Promise<void>>(async () => undefined);
+  const startPageRef = useRef<(offset: number, runId?: number) => Promise<void>>(async () => undefined);
+
   const [toc, setToc] = useState<TocItem[]>([]);
   const [tocOpen, setTocOpen] = useState(false);
   const [progress, setProgress] = useState(record.progress ?? 0);
@@ -38,15 +169,57 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [narrationPreparing, setNarrationPreparing] = useState(false);
+  const [savedCheckpoint, setSavedCheckpoint] = useState<NarrationCheckpoint | null>(null);
+  const [resumePromptOpen, setResumePromptOpen] = useState(false);
   const [error, setError] = useState('');
 
-  const stopSpeech = useCallback(() => {
-    window.speechSynthesis.cancel();
-    speechQueueRef.current = [];
-    speechIndexRef.current = 0;
+  useEffect(() => { speakingRef.current = speaking; }, [speaking]);
+
+  const persistCheckpoint = useCallback((cfi: string, offset: number, force = false) => {
+    const key = checkpointKeyRef.current;
+    if (!key || !cfi) return;
+    const now = Date.now();
+    if (!force && now - lastCheckpointWriteRef.current < 900) return;
+    lastCheckpointWriteRef.current = now;
+    const checkpoint = { cfi, offset: Math.max(0, Math.floor(offset)), updatedAt: now };
+    try { localStorage.setItem(key, JSON.stringify(checkpoint)); } catch { /* storage may be disabled */ }
+    setSavedCheckpoint(checkpoint);
+  }, []);
+
+  const stopSpeech = useCallback((savePosition = true) => {
+    speechRunRef.current += 1;
+    if (savePosition && currentPageCfiRef.current) {
+      persistCheckpoint(currentPageCfiRef.current, speechOffsetRef.current, true);
+    }
+    try { window.speechSynthesis.cancel(); } catch { /* browser speech engine unavailable */ }
+    clearSpeechHighlight(speechPageRef.current);
+    speechPageRef.current = null;
+    speechSegmentsRef.current = [];
+    speechSegmentIndexRef.current = 0;
+    speakingRef.current = false;
     setSpeaking(false);
     setPaused(false);
-  }, []);
+    setNarrationPreparing(false);
+  }, [persistCheckpoint]);
+
+  useEffect(() => {
+    let active = true;
+    getCurrentUser().then((user) => {
+      if (!active || !user) return;
+      const key = `luma:narration:${user.id}:${record.id}`;
+      checkpointKeyRef.current = key;
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as Partial<NarrationCheckpoint>;
+        if (typeof parsed.cfi === 'string' && parsed.cfi && Number.isFinite(parsed.offset)) {
+          setSavedCheckpoint({ cfi: parsed.cfi, offset: Math.max(0, Number(parsed.offset)), updatedAt: Number(parsed.updatedAt || 0) });
+        }
+      } catch { /* ignore malformed local checkpoint */ }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [record.id]);
 
   useEffect(() => {
     const synth = window.speechSynthesis;
@@ -68,8 +241,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     let disposed = false;
     let book: Book | null = null;
     let rendition: Rendition | null = null;
-    progressRef.current = record.progress ?? 0;
-    setProgress(progressRef.current);
 
     const initialise = async () => {
       setLoading(true);
@@ -102,16 +273,18 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
         rendition.on('relocated', (location: { start?: { cfi?: string } }) => {
           const cfi = location.start?.cfi;
           if (!cfi || disposed || !book) return;
-          let percentage = progressRef.current;
+          currentPageCfiRef.current = cfi;
+          let percentage = progress;
           try { percentage = book.locations.percentageFromCfi(cfi); } catch { /* preserve last percentage */ }
           percentage = Math.max(0, Math.min(1, percentage));
-          progressRef.current = percentage;
           setProgress(percentage);
           onProgress(record.id, cfi, percentage);
           updateProgress(record.id, cfi, percentage).catch(() => setError('No se pudo guardar el progreso de lectura.'));
         });
 
         await rendition.display(record.cfi || undefined);
+        await waitForPagePaint();
+        currentPageCfiRef.current = currentCfi(rendition) || record.cfi || '';
       } catch (cause) {
         console.error(cause);
         setError(cause instanceof Error ? cause.message : 'No se pudo abrir este EPUB.');
@@ -123,67 +296,203 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     initialise();
     return () => {
       disposed = true;
-      stopSpeech();
+      stopSpeech(true);
       try { rendition?.destroy(); } catch { /* already disposed */ }
       try { book?.destroy(); } catch { /* already disposed */ }
       renditionRef.current = null;
       bookRef.current = null;
     };
-  // record.id intentionally defines the reader lifecycle; progress updates must not recreate the rendition.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [record.id, stopSpeech]);
+  }, [record.id]);
 
-  const speakNext = useCallback(() => {
-    const queue = speechQueueRef.current;
-    const index = speechIndexRef.current;
-    if (index >= queue.length) {
-      setSpeaking(false);
-      setPaused(false);
+  const speakSegment = useCallback((index: number, runId: number) => {
+    if (runId !== speechRunRef.current) return;
+    const segment = speechSegmentsRef.current[index];
+    const page = speechPageRef.current;
+    if (!segment || !page) {
+      void autoAdvanceRef.current(runId);
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(queue[index]);
+    speechSegmentIndexRef.current = index;
+    const utterance = new SpeechSynthesisUtterance(segment.text);
     const selectedVoice = voices.find((voice) => voice.name === voiceName);
     if (selectedVoice) utterance.voice = selectedVoice;
     utterance.rate = rate;
-    utterance.onend = () => {
-      speechIndexRef.current += 1;
-      speakNext();
+
+    speechOffsetRef.current = segment.start;
+    highlightSpeechOffset(page, segment.start);
+
+    utterance.onboundary = (event) => {
+      if (runId !== speechRunRef.current) return;
+      const absoluteOffset = Math.min(page.text.length, segment.start + Math.max(0, event.charIndex || 0));
+      speechOffsetRef.current = absoluteOffset;
+      highlightSpeechOffset(page, absoluteOffset);
+      persistCheckpoint(currentPageCfiRef.current, absoluteOffset);
     };
-    utterance.onerror = () => {
+
+    utterance.onend = () => {
+      if (runId !== speechRunRef.current) return;
+      speechOffsetRef.current = segment.end;
+      persistCheckpoint(currentPageCfiRef.current, segment.end, true);
+      const nextIndex = index + 1;
+      if (nextIndex < speechSegmentsRef.current.length) {
+        speakSegment(nextIndex, runId);
+        return;
+      }
+      clearSpeechHighlight(page);
+      void autoAdvanceRef.current(runId);
+    };
+
+    utterance.onerror = (event) => {
+      if (runId !== speechRunRef.current) return;
+      const reason = String((event as SpeechSynthesisErrorEvent).error || '');
+      if (reason === 'interrupted' || reason === 'canceled') return;
+      speakingRef.current = false;
       setSpeaking(false);
       setPaused(false);
+      setNarrationPreparing(false);
       setError('La voz del navegador interrumpió la narración.');
     };
-    window.speechSynthesis.speak(utterance);
-  }, [rate, voiceName, voices]);
 
-  const startSpeech = useCallback(() => {
+    window.speechSynthesis.speak(utterance);
+  }, [persistCheckpoint, rate, voiceName, voices]);
+
+  const startCurrentPageNarration = useCallback(async (offset: number, existingRunId?: number) => {
     const rendition = renditionRef.current;
     if (!rendition) return;
-    const text = rendition.getContents().map((content) => content.document.body?.innerText ?? '').join('\n').trim();
-    const chunks = splitForSpeech(text);
-    if (!chunks.length) {
-      setError('No encontré texto narrable en la página actual.');
+
+    let runId = existingRunId;
+    if (runId === undefined) {
+      speechRunRef.current += 1;
+      runId = speechRunRef.current;
+      try { window.speechSynthesis.cancel(); } catch { /* no-op */ }
+    }
+    if (runId !== speechRunRef.current) return;
+
+    setNarrationPreparing(true);
+    await waitForPagePaint();
+    if (runId !== speechRunRef.current) return;
+
+    currentPageCfiRef.current = currentCfi(rendition) || currentPageCfiRef.current;
+    const page = visibleSpeechPage(rendition);
+    speechPageRef.current = page;
+
+    if (!page.text.trim()) {
+      setNarrationPreparing(false);
+      await autoAdvanceRef.current(runId);
       return;
     }
-    stopSpeech();
-    speechQueueRef.current = chunks;
-    speechIndexRef.current = 0;
+
+    const safeOffset = Math.max(0, Math.min(page.text.length, offset));
+    speechOffsetRef.current = safeOffset;
+    const segments = splitSpeechSegments(page.text, safeOffset);
+    speechSegmentsRef.current = segments;
+    speechSegmentIndexRef.current = 0;
+
+    if (!segments.length) {
+      setNarrationPreparing(false);
+      await autoAdvanceRef.current(runId);
+      return;
+    }
+
+    persistCheckpoint(currentPageCfiRef.current, safeOffset, true);
+    speakingRef.current = true;
     setSpeaking(true);
     setPaused(false);
-    speakNext();
-  }, [speakNext, stopSpeech]);
+    setNarrationPreparing(false);
+    speakSegment(0, runId);
+  }, [persistCheckpoint, speakSegment]);
 
-  const togglePause = () => {
-    if (!speaking) return startSpeech();
-    if (paused) {
-      window.speechSynthesis.resume();
+  useEffect(() => { startPageRef.current = startCurrentPageNarration; }, [startCurrentPageNarration]);
+
+  const autoAdvance = useCallback(async (runId: number) => {
+    const rendition = renditionRef.current;
+    if (!rendition || runId !== speechRunRef.current) return;
+    const before = currentPageCfiRef.current || currentCfi(rendition);
+
+    try {
+      await rendition.next();
+      await waitForPagePaint();
+    } catch { /* end of malformed book */ }
+
+    if (runId !== speechRunRef.current) return;
+    const after = currentCfi(rendition) || currentPageCfiRef.current;
+    currentPageCfiRef.current = after;
+
+    if (!after || after === before) {
+      persistCheckpoint(before, speechOffsetRef.current, true);
+      speakingRef.current = false;
+      setSpeaking(false);
       setPaused(false);
-    } else {
-      window.speechSynthesis.pause();
-      setPaused(true);
+      setNarrationPreparing(false);
+      return;
     }
+
+    speechOffsetRef.current = 0;
+    persistCheckpoint(after, 0, true);
+    await startPageRef.current(0, runId);
+  }, [persistCheckpoint]);
+
+  useEffect(() => { autoAdvanceRef.current = autoAdvance; }, [autoAdvance]);
+
+  const beginFromCurrentPage = useCallback(async () => {
+    setResumePromptOpen(false);
+    speechOffsetRef.current = 0;
+    await startCurrentPageNarration(0);
+  }, [startCurrentPageNarration]);
+
+  const continueSavedNarration = useCallback(async () => {
+    const checkpoint = savedCheckpoint;
+    const rendition = renditionRef.current;
+    if (!checkpoint || !rendition) return beginFromCurrentPage();
+
+    setResumePromptOpen(false);
+    stopSpeech(false);
+    speechRunRef.current += 1;
+    const runId = speechRunRef.current;
+    setNarrationPreparing(true);
+
+    try {
+      await rendition.display(checkpoint.cfi);
+      await waitForPagePaint();
+      if (runId !== speechRunRef.current) return;
+      currentPageCfiRef.current = currentCfi(rendition) || checkpoint.cfi;
+      await startPageRef.current(checkpoint.offset, runId);
+    } catch {
+      setNarrationPreparing(false);
+      setError('No pude recuperar exactamente el punto de narración. Puedes iniciar desde la página actual.');
+    }
+  }, [beginFromCurrentPage, savedCheckpoint, stopSpeech]);
+
+  const requestPlay = () => {
+    if (speaking) {
+      if (paused) {
+        window.speechSynthesis.resume();
+        setPaused(false);
+      } else {
+        window.speechSynthesis.pause();
+        setPaused(true);
+      }
+      return;
+    }
+
+    if (savedCheckpoint?.cfi) {
+      setResumePromptOpen(true);
+      return;
+    }
+    void beginFromCurrentPage();
+  };
+
+  const manualTurnPage = async (direction: 'prev' | 'next') => {
+    const rendition = renditionRef.current;
+    if (!rendition) return;
+    stopSpeech(true);
+    if (direction === 'prev') await rendition.prev();
+    else await rendition.next();
+    await waitForPagePaint();
+    currentPageCfiRef.current = currentCfi(rendition) || currentPageCfiRef.current;
+    speechOffsetRef.current = 0;
   };
 
   const flatToc = flattenToc(toc);
@@ -207,9 +516,12 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
           </div>
           <div className="toc-list">
             {flatToc.length ? flatToc.map((item, index) => (
-              <button key={`${item.href}-${index}`} style={{ paddingLeft: `${18 + item.depth * 16}px` }} onClick={() => {
-                stopSpeech();
-                renditionRef.current?.display(item.href);
+              <button key={`${item.href}-${index}`} style={{ paddingLeft: `${18 + item.depth * 16}px` }} onClick={async () => {
+                stopSpeech(true);
+                await renditionRef.current?.display(item.href);
+                await waitForPagePaint();
+                currentPageCfiRef.current = currentCfi(renditionRef.current) || currentPageCfiRef.current;
+                speechOffsetRef.current = 0;
                 setTocOpen(false);
               }}>{item.label || `Sección ${index + 1}`}</button>
             )) : <p className="muted">Este EPUB no incluye un índice navegable.</p>}
@@ -217,20 +529,38 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
         </aside>
 
         <section className="book-stage">
-          <button className="page-arrow left" onClick={() => { stopSpeech(); renditionRef.current?.prev(); }} aria-label="Página anterior"><ChevronLeft /></button>
+          <button className="page-arrow left" onClick={() => { void manualTurnPage('prev'); }} aria-label="Página anterior"><ChevronLeft /></button>
           <div className="paper"><div ref={viewerRef} className="epub-viewer" /></div>
-          <button className="page-arrow right" onClick={() => { stopSpeech(); renditionRef.current?.next(); }} aria-label="Página siguiente"><ChevronRight /></button>
+          <button className="page-arrow right" onClick={() => { void manualTurnPage('next'); }} aria-label="Página siguiente"><ChevronRight /></button>
           {loading && <div className="reader-loading"><LoaderCircle className="spin" /><span>Abriendo EPUB…</span></div>}
         </section>
       </div>
 
       <footer className="audio-dock">
-        <div className="audio-copy"><span className="audio-icon"><Headphones /></span><div><small>NARRACIÓN</small><strong>{speaking ? (paused ? 'En pausa' : 'Leyendo en voz alta') : 'Escuchar esta página'}</strong></div></div>
-        <button className="play-button" onClick={togglePause} disabled={loading} aria-label={paused || !speaking ? 'Reproducir' : 'Pausar'}>{speaking && !paused ? <CirclePause /> : <CirclePlay />}</button>
-        <label className="audio-control">Voz<select value={voiceName} onChange={(event) => { stopSpeech(); setVoiceName(event.target.value); }}>{voices.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} · {voice.lang}</option>)}</select></label>
-        <label className="audio-control speed">Velocidad<select value={rate} onChange={(event) => { stopSpeech(); setRate(Number(event.target.value)); }}><option value={0.8}>0.8×</option><option value={1}>1×</option><option value={1.15}>1.15×</option><option value={1.3}>1.3×</option><option value={1.5}>1.5×</option><option value={1.75}>1.75×</option></select></label>
-        {speaking && <button className="text-button" onClick={stopSpeech}>Detener</button>}
+        <div className="audio-copy"><span className="audio-icon"><Headphones /></span><div><small>NARRACIÓN CONTINUA</small><strong>{narrationPreparing ? 'Preparando narración…' : speaking ? (paused ? 'En pausa' : 'Leyendo y siguiendo el texto') : 'Escuchar el libro'}</strong></div></div>
+        <button className="play-button" onClick={requestPlay} disabled={loading || narrationPreparing} aria-label={paused || !speaking ? 'Reproducir' : 'Pausar'}>{speaking && !paused ? <CirclePause /> : <CirclePlay />}</button>
+        <label className="audio-control">Voz<select value={voiceName} onChange={(event) => { stopSpeech(true); setVoiceName(event.target.value); }}>{voices.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} · {voice.lang}</option>)}</select></label>
+        <label className="audio-control speed">Velocidad<select value={rate} onChange={(event) => { stopSpeech(true); setRate(Number(event.target.value)); }}><option value={0.8}>0.8×</option><option value={1}>1×</option><option value={1.15}>1.15×</option><option value={1.3}>1.3×</option><option value={1.5}>1.5×</option><option value={1.75}>1.75×</option></select></label>
+        {speaking && <button className="text-button" onClick={() => stopSpeech(true)}>Detener</button>}
       </footer>
+
+      {resumePromptOpen && <div className="narration-choice-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setResumePromptOpen(false); }}>
+        <section className="narration-choice" role="dialog" aria-modal="true" aria-labelledby="narration-choice-title">
+          <button className="modal-close" onClick={() => setResumePromptOpen(false)} aria-label="Cerrar"><X /></button>
+          <span className="narration-choice-icon"><Headphones /></span>
+          <span className="eyebrow">LUMA RECUERDA TU AUDIO</span>
+          <h2 id="narration-choice-title">¿Desde dónde quieres escuchar?</h2>
+          <p>Hay un punto de narración guardado para este libro. Puedes retomarlo o comenzar desde la página que tienes abierta ahora.</p>
+          <div className="narration-choice-actions">
+            <button className="resume-option primary" onClick={() => { void continueSavedNarration(); }}>
+              <MapPin /><span><strong>Continuar donde lo dejé</strong><small>Recupera la página y la palabra aproximada.</small></span>
+            </button>
+            <button className="resume-option" onClick={() => { void beginFromCurrentPage(); }}>
+              <BookOpenCheck /><span><strong>Empezar esta página</strong><small>Lee solamente desde la página visible actual.</small></span>
+            </button>
+          </div>
+        </section>
+      </div>}
 
       {error && <button className="toast" onClick={() => setError('')}>{error}<X size={16} /></button>}
     </main>
