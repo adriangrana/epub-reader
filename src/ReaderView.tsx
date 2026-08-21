@@ -11,7 +11,8 @@ type TocItem = { label?: string; href: string; subitems?: TocItem[] };
 type NarrationCheckpoint = { cfi: string; offset: number; updatedAt: number };
 type SpeechToken = { start: number; end: number; range: Range; document: Document };
 type SpeechPage = { text: string; tokens: SpeechToken[] };
-type PageLocation = { start?: { cfi?: string }; end?: { cfi?: string } };
+type PageLocation = { start?: { cfi?: string; href?: string }; end?: { cfi?: string; href?: string } };
+type PageDirection = 'prev' | 'next';
 
 type Props = {
   record: LibraryBook;
@@ -24,6 +25,21 @@ function flattenToc(items: TocItem[], depth = 0): Array<TocItem & { depth: numbe
     { ...item, depth },
     ...(item.subitems ? flattenToc(item.subitems, depth + 1) : []),
   ]);
+}
+
+function normalizeHref(href: string) {
+  const withoutFragment = href.split('#')[0].split('?')[0].replace(/\\/g, '/').replace(/^(\.\/)+/, '');
+  try { return decodeURIComponent(withoutFragment); } catch { return withoutFragment; }
+}
+
+function resolveActiveTocHref(items: TocItem[], currentHref: string) {
+  if (!currentHref) return '';
+  const current = normalizeHref(currentHref);
+  const match = flattenToc(items).find((item) => {
+    const candidate = normalizeHref(item.href);
+    return candidate === current || candidate.endsWith(`/${current}`) || current.endsWith(`/${candidate}`);
+  });
+  return match?.href ?? '';
 }
 
 function delay(ms: number) {
@@ -46,6 +62,49 @@ function pageLocation(rendition: Rendition | null): PageLocation {
 
 function currentCfi(rendition: Rendition | null): string {
   return pageLocation(rendition).start?.cfi ?? '';
+}
+
+function installSwipeGestures(document: Document, onTurnPage: (direction: PageDirection) => void) {
+  const root = document.documentElement;
+  if (!root || root.dataset.lumaSwipe === 'true') return;
+  root.dataset.lumaSwipe = 'true';
+
+  let tracking = false;
+  let startX = 0;
+  let startY = 0;
+  let startedAt = 0;
+
+  document.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 1) {
+      tracking = false;
+      return;
+    }
+    const touch = event.touches[0];
+    tracking = true;
+    startX = touch.clientX;
+    startY = touch.clientY;
+    startedAt = Date.now();
+  }, { passive: true });
+
+  document.addEventListener('touchcancel', () => { tracking = false; }, { passive: true });
+
+  document.addEventListener('touchend', (event) => {
+    if (!tracking || event.changedTouches.length !== 1) return;
+    tracking = false;
+    if (!window.matchMedia('(max-width: 900px)').matches) return;
+
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - startX;
+    const deltaY = touch.clientY - startY;
+    const elapsed = Date.now() - startedAt;
+    const horizontalDistance = Math.abs(deltaX);
+    const verticalDistance = Math.abs(deltaY);
+
+    // Require a deliberate, mostly-horizontal swipe. This leaves normal taps,
+    // text selection and vertical gestures alone.
+    if (elapsed > 900 || horizontalDistance < 55 || horizontalDistance < verticalDistance * 1.25) return;
+    onTurnPage(deltaX < 0 ? 'next' : 'prev');
+  }, { passive: true });
 }
 
 function visibleSpeechPage(rendition: Rendition): SpeechPage {
@@ -74,10 +133,6 @@ function visibleSpeechPage(rendition: Rendition): SpeechPage {
           range.setStart(node, localStart);
           range.setEnd(node, localEnd);
 
-          // epub.js paginates a chapter with CSS columns. Geometry inside the
-          // iframe can make words from neighbouring columns look "visible".
-          // Compare each word CFI against the exact start/end CFI reported for
-          // the rendered page instead, so narration cannot leak into page N+1.
           if (startCfi || endCfi) {
             try {
               const point = range.cloneRange();
@@ -86,8 +141,8 @@ function visibleSpeechPage(rendition: Rendition): SpeechPage {
               if (startCfi && rendition.epubcfi.compare(tokenCfi, startCfi) < 0) continue;
               if (endCfi && rendition.epubcfi.compare(tokenCfi, endCfi) > 0) continue;
             } catch {
-              // If a malformed EPUB cannot map one word to CFI, keep that word
-              // rather than making the whole page unnarratable.
+              // Keep a word that a malformed EPUB cannot map to CFI instead of
+              // making the whole visible page unnarratable.
             }
           }
 
@@ -170,8 +225,10 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const lastCheckpointWriteRef = useRef(0);
   const autoAdvanceRef = useRef<(runId: number) => Promise<void>>(async () => undefined);
   const startPageRef = useRef<(offset: number, runId?: number) => Promise<void>>(async () => undefined);
+  const manualTurnPageRef = useRef<(direction: PageDirection) => Promise<void>>(async () => undefined);
 
   const [toc, setToc] = useState<TocItem[]>([]);
+  const [activeTocHref, setActiveTocHref] = useState('');
   const [tocOpen, setTocOpen] = useState(false);
   const [progress, setProgress] = useState(record.progress ?? 0);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -215,8 +272,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     let active = true;
     getCurrentUser().then((user) => {
       if (!active || !user) return;
-      // v2 intentionally ignores checkpoints created by the previous page
-      // detector, because those offsets could point into the next CSS column.
       const key = `luma:narration:v2:${user.id}:${record.id}`;
       checkpointKeyRef.current = key;
       try {
@@ -264,7 +319,8 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
         if (disposed) return;
 
         const navigation = await book.loaded.navigation;
-        setToc((navigation.toc ?? []) as TocItem[]);
+        const tocItems = (navigation.toc ?? []) as TocItem[];
+        setToc(tocItems);
         if (!viewerRef.current) throw new Error('No se encontró el contenedor de lectura.');
 
         rendition = book.renderTo(viewerRef.current, {
@@ -277,13 +333,27 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
           'img, svg': { 'max-width': '100%', 'max-height': '90vh', 'object-fit': 'contain' },
         });
 
+        rendition.on('rendered', (_section: unknown, view: { document?: Document }) => {
+          if (view?.document) {
+            installSwipeGestures(view.document, (direction) => { void manualTurnPageRef.current(direction); });
+          }
+        });
+
         try { await book.locations.generate(1200); } catch { /* reading still works without generated locations */ }
         if (disposed) return;
 
-        rendition.on('relocated', (location: { start?: { cfi?: string } }) => {
+        rendition.on('relocated', (location: PageLocation) => {
           const cfi = location.start?.cfi;
           if (!cfi || disposed || !book) return;
           currentPageCfiRef.current = cfi;
+
+          let sectionHref = location.start?.href ?? '';
+          try {
+            const section = book.spine.get(cfi) as { href?: string } | undefined;
+            sectionHref = section?.href || sectionHref;
+          } catch { /* location href is enough when available */ }
+          setActiveTocHref(resolveActiveTocHref(tocItems, sectionHref));
+
           let percentage = progress;
           try { percentage = book.locations.percentageFromCfi(cfi); } catch { /* preserve last percentage */ }
           percentage = Math.max(0, Math.min(1, percentage));
@@ -294,7 +364,14 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
         await rendition.display(record.cfi || undefined);
         await waitForPagePaint();
-        currentPageCfiRef.current = currentCfi(rendition) || record.cfi || '';
+        const initialCfi = currentCfi(rendition) || record.cfi || '';
+        currentPageCfiRef.current = initialCfi;
+        if (initialCfi) {
+          try {
+            const section = book.spine.get(initialCfi) as { href?: string } | undefined;
+            setActiveTocHref(resolveActiveTocHref(tocItems, section?.href ?? ''));
+          } catch { /* relocated usually already selected the chapter */ }
+        }
       } catch (cause) {
         console.error(cause);
         setError(cause instanceof Error ? cause.message : 'No se pudo abrir este EPUB.');
@@ -314,6 +391,15 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [record.id]);
+
+  useEffect(() => {
+    if (!activeTocHref) return;
+    const frame = requestAnimationFrame(() => {
+      const active = document.querySelector('.toc-list button[aria-current="location"]');
+      active?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeTocHref, tocOpen]);
 
   const speakSegment = useCallback((index: number, runId: number) => {
     if (runId !== speechRunRef.current) return;
@@ -491,7 +577,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     void beginFromCurrentPage();
   };
 
-  const manualTurnPage = async (direction: 'prev' | 'next') => {
+  const manualTurnPage = useCallback(async (direction: PageDirection) => {
     const rendition = renditionRef.current;
     if (!rendition) return;
     stopSpeech(true);
@@ -500,7 +586,9 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     await waitForPagePaint();
     currentPageCfiRef.current = currentCfi(rendition) || currentPageCfiRef.current;
     speechOffsetRef.current = 0;
-  };
+  }, [stopSpeech]);
+
+  useEffect(() => { manualTurnPageRef.current = manualTurnPage; }, [manualTurnPage]);
 
   const flatToc = flattenToc(toc);
   const progressPercent = Math.round(progress * 100);
@@ -522,16 +610,25 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
             <button className="icon-button mobile-only" onClick={() => setTocOpen(false)} aria-label="Cerrar índice"><X /></button>
           </div>
           <div className="toc-list">
-            {flatToc.length ? flatToc.map((item, index) => (
-              <button key={`${item.href}-${index}`} style={{ paddingLeft: `${18 + item.depth * 16}px` }} onClick={async () => {
-                stopSpeech(true);
-                await renditionRef.current?.display(item.href);
-                await waitForPagePaint();
-                currentPageCfiRef.current = currentCfi(renditionRef.current) || currentPageCfiRef.current;
-                speechOffsetRef.current = 0;
-                setTocOpen(false);
-              }}>{item.label || `Sección ${index + 1}`}</button>
-            )) : <p className="muted">Este EPUB no incluye un índice navegable.</p>}
+            {flatToc.length ? flatToc.map((item, index) => {
+              const isActive = item.href === activeTocHref;
+              return (
+                <button
+                  key={`${item.href}-${index}`}
+                  className={isActive ? 'active' : undefined}
+                  aria-current={isActive ? 'location' : undefined}
+                  style={{ paddingLeft: `${18 + item.depth * 16}px` }}
+                  onClick={async () => {
+                    stopSpeech(true);
+                    await renditionRef.current?.display(item.href);
+                    await waitForPagePaint();
+                    currentPageCfiRef.current = currentCfi(renditionRef.current) || currentPageCfiRef.current;
+                    speechOffsetRef.current = 0;
+                    setTocOpen(false);
+                  }}
+                >{item.label || `Sección ${index + 1}`}</button>
+              );
+            }) : <p className="muted">Este EPUB no incluye un índice navegable.</p>}
           </div>
         </aside>
 
