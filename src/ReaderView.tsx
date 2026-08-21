@@ -154,7 +154,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const speechSegmentIndexRef = useRef(0);
   const speechOffsetRef = useRef(0);
   const speechRunRef = useRef(0);
-  const speakingRef = useRef(false);
   const checkpointKeyRef = useRef<string | null>(null);
   const lastCheckpointWriteRef = useRef(0);
   const autoAdvanceRef = useRef<(runId: number) => Promise<void>>(async () => undefined);
@@ -174,8 +173,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const [resumePromptOpen, setResumePromptOpen] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => { speakingRef.current = speaking; }, [speaking]);
-
   const persistCheckpoint = useCallback((cfi: string, offset: number, force = false) => {
     const key = checkpointKeyRef.current;
     if (!key || !cfi) return;
@@ -189,7 +186,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
   const stopSpeech = useCallback((savePosition = true) => {
     speechRunRef.current += 1;
-    if (savePosition && currentPageCfiRef.current) {
+    if (savePosition && speechPageRef.current && currentPageCfiRef.current) {
       persistCheckpoint(currentPageCfiRef.current, speechOffsetRef.current, true);
     }
     try { window.speechSynthesis.cancel(); } catch { /* browser speech engine unavailable */ }
@@ -197,7 +194,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     speechPageRef.current = null;
     speechSegmentsRef.current = [];
     speechSegmentIndexRef.current = 0;
-    speakingRef.current = false;
     setSpeaking(false);
     setPaused(false);
     setNarrationPreparing(false);
@@ -348,7 +344,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
       if (runId !== speechRunRef.current) return;
       const reason = String((event as SpeechSynthesisErrorEvent).error || '');
       if (reason === 'interrupted' || reason === 'canceled') return;
-      speakingRef.current = false;
       setSpeaking(false);
       setPaused(false);
       setNarrationPreparing(false);
@@ -397,7 +392,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     }
 
     persistCheckpoint(currentPageCfiRef.current, safeOffset, true);
-    speakingRef.current = true;
     setSpeaking(true);
     setPaused(false);
     setNarrationPreparing(false);
@@ -422,7 +416,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
     if (!after || after === before) {
       persistCheckpoint(before, speechOffsetRef.current, true);
-      speakingRef.current = false;
       setSpeaking(false);
       setPaused(false);
       setNarrationPreparing(false);
