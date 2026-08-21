@@ -120,10 +120,21 @@ export async function setBookVisibility(bookId: string, visibility: 'private' | 
   })).book;
 }
 
-export async function updateBookDescription(bookId: string, description: string): Promise<LibraryBook> {
+export async function updateBookMetadata(
+  bookId: string,
+  metadata: { title: string; author: string; description: string },
+): Promise<LibraryBook> {
   return (await request<{ book: LibraryBook }>(`/api/library/${encodeURIComponent(bookId)}/metadata`, {
-    method: 'PATCH', body: JSON.stringify({ description }),
+    method: 'PATCH',
+    body: JSON.stringify(metadata),
   })).book;
+}
+
+export async function updateBookDescription(bookId: string, description: string): Promise<LibraryBook> {
+  const books = await getLibrary();
+  const book = books.find((candidate) => candidate.id === bookId);
+  if (!book) throw new Error('Libro no encontrado en tu biblioteca.');
+  return updateBookMetadata(bookId, { title: book.title, author: book.author, description });
 }
 
 export async function replaceBookEpub(bookId: string, file: File): Promise<LibraryBook> {
