@@ -209,8 +209,13 @@ const server = createServer(async (req, res) => {
       const data = await readBuffer(req, MAX_EPUB_BYTES);
       if (!data.length || data[0] !== 0x50 || data[1] !== 0x4b) return sendError(res, 400, 'El archivo no parece ser un EPUB válido.');
 
+      const fallbackTitle = fileName.replace(/\.epub$/i, '') || 'Libro sin título';
       const fileHash = createHash('sha256').update(data).digest('hex');
-      let asset = db.prepare('SELECT id, cover_path AS coverPath FROM book_assets WHERE file_hash = ?').get(fileHash);
+      let asset = db.prepare(`
+        SELECT id, cover_path AS coverPath, uploaded_by AS uploadedBy, description
+        FROM book_assets WHERE file_hash = ?
+      `).get(fileHash);
+
       if (!asset) {
         const id = randomUUID();
         const storedFileName = `${fileHash}.epub`;
@@ -218,8 +223,16 @@ const server = createServer(async (req, res) => {
         db.prepare(`
           INSERT INTO book_assets (id, file_hash, file_name, file_path, title, author, description, uploaded_by, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, fileHash, fileName || 'book.epub', storedFileName, title || fileName.replace(/\.epub$/i, '') || 'Libro sin título', author || 'Autor desconocido', description, user.id, Date.now());
-        asset = { id, coverPath: null };
+        `).run(id, fileHash, fileName || 'book.epub', storedFileName, title || fallbackTitle, author || 'Autor desconocido', description, user.id, Date.now());
+        asset = { id, coverPath: null, uploadedBy: user.id, description };
+      } else if (asset.uploadedBy === user.id) {
+        // The physical EPUB is deduplicated by SHA-256, but the original uploader
+        // is still allowed to apply the metadata reviewed in the import dialog.
+        // Keep an existing synopsis if the user leaves the import field empty;
+        // clearing it explicitly is available from "Editar datos".
+        const nextDescription = description || String(asset.description || '');
+        db.prepare('UPDATE book_assets SET title = ?, author = ?, description = ? WHERE id = ?')
+          .run(title || fallbackTitle, author || 'Autor desconocido', nextDescription, asset.id);
       }
 
       db.prepare(`INSERT OR IGNORE INTO library_entries (id, user_id, book_id, visibility, added_at) VALUES (?, ?, ?, 'private', ?)`)
