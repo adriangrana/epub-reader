@@ -75,7 +75,11 @@ export async function logout(): Promise<void> {
 }
 
 export async function getLibrary(): Promise<LibraryBook[]> {
-  return (await request<{ books: LibraryBook[] }>('/api/library')).books;
+  const books = (await request<{ books: LibraryBook[] }>('/api/library')).books;
+  return books.map((book) => ({
+    ...book,
+    lastOpenedAt: (book.progress ?? 0) >= .01 && (book.progress ?? 0) < .999 ? book.lastOpenedAt : undefined,
+  }));
 }
 
 export async function getPublicBooks(query = ''): Promise<LibraryBook[]> {
