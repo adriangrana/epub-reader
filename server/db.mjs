@@ -74,9 +74,27 @@ db.exec(`
     cfi TEXT,
     percentage REAL NOT NULL DEFAULT 0,
     last_opened_at INTEGER NOT NULL,
+    narration_cfi TEXT,
+    narration_offset INTEGER NOT NULL DEFAULT 0,
+    narration_updated_at INTEGER,
     PRIMARY KEY(user_id, book_id)
   );
 `);
+
+// Existing installations may already have reading_progress from the first
+// multi-user version. Keep the migration additive so users do not lose data.
+const progressColumns = new Set(
+  db.prepare('PRAGMA table_info(reading_progress)').all().map((column) => column.name),
+);
+if (!progressColumns.has('narration_cfi')) {
+  db.exec('ALTER TABLE reading_progress ADD COLUMN narration_cfi TEXT');
+}
+if (!progressColumns.has('narration_offset')) {
+  db.exec('ALTER TABLE reading_progress ADD COLUMN narration_offset INTEGER NOT NULL DEFAULT 0');
+}
+if (!progressColumns.has('narration_updated_at')) {
+  db.exec('ALTER TABLE reading_progress ADD COLUMN narration_updated_at INTEGER');
+}
 
 // Sessions are deliberately server-side so revocation/logout is immediate.
 db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now());
