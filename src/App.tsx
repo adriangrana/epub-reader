@@ -1,7 +1,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen, Check, Download, Globe2, LibraryBig, LoaderCircle, LockKeyhole, LogOut,
-  Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, UsersRound, X,
+  Menu, Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, UsersRound, X,
 } from 'lucide-react';
 import {
   acceptShare, addPublicBook, coverUrl, dismissShare, downloadUrl, getCurrentUser,
@@ -148,6 +148,7 @@ function App() {
   const [shareEmail, setShareEmail] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refreshAll = useCallback(async () => {
@@ -180,12 +181,27 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileSidebarOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mobileSidebarOpen]);
+
   const currentBooks = section === 'library' ? library : section === 'public' ? publicBooks : shares;
   const filteredBooks = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return currentBooks;
     return currentBooks.filter((book) => `${book.title} ${book.author} ${book.publishedBy ?? ''} ${book.sharedBy ?? ''}`.toLowerCase().includes(needle));
   }, [currentBooks, query]);
+
+  const selectSection = (nextSection: Section) => {
+    setSection(nextSection);
+    setQuery('');
+    setMobileSidebarOpen(false);
+  };
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []).filter((file) => file.name.toLowerCase().endsWith('.epub'));
@@ -278,6 +294,7 @@ function App() {
       setPublicBooks([]);
       setShares([]);
       setReader(null);
+      setMobileSidebarOpen(false);
     }
   };
 
@@ -298,18 +315,23 @@ function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
+      <aside className={`sidebar ${mobileSidebarOpen ? 'mobile-open' : ''}`} aria-label="Navegación de biblioteca">
+        <button className="mobile-sidebar-close" onClick={() => setMobileSidebarOpen(false)} aria-label="Cerrar menú"><X /></button>
         <div className="brand"><span className="brand-mark"><Sparkles /></span><div><strong>Luma</strong><small>LIBRARY</small></div></div>
         <nav>
-          <button className={section === 'library' ? 'active' : ''} onClick={() => { setSection('library'); setQuery(''); }}><LibraryBig /> Mi biblioteca <span>{library.length}</span></button>
-          <button className={section === 'public' ? 'active' : ''} onClick={() => { setSection('public'); setQuery(''); }}><Globe2 /> Biblioteca pública <span>{publicBooks.length}</span></button>
-          <button className={section === 'shared' ? 'active' : ''} onClick={() => { setSection('shared'); setQuery(''); }}><UsersRound /> Compartidos <span>{shares.length}</span></button>
+          <button className={section === 'library' ? 'active' : ''} onClick={() => selectSection('library')}><LibraryBig /> Mi biblioteca <span>{library.length}</span></button>
+          <button className={section === 'public' ? 'active' : ''} onClick={() => selectSection('public')}><Globe2 /> Biblioteca pública <span>{publicBooks.length}</span></button>
+          <button className={section === 'shared' ? 'active' : ''} onClick={() => selectSection('shared')}><UsersRound /> Compartidos <span>{shares.length}</span></button>
         </nav>
         <div className="storage-card"><span>ALMACENAMIENTO LOCAL</span><strong>Los EPUB viven en este equipo.</strong><p>Las cuentas controlan el acceso; el archivo físico se conserva en el servidor Luma.</p></div>
         <div className="account-card"><div className="account-avatar">{user.name.slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><span>{user.email}</span></div><button onClick={handleLogout} title="Cerrar sesión"><LogOut /></button></div>
       </aside>
 
+      {mobileSidebarOpen && <button className="mobile-sidebar-backdrop" onClick={() => setMobileSidebarOpen(false)} aria-label="Cerrar menú" />}
+
       <section className="library">
+        <button className="mobile-library-menu" onClick={() => setMobileSidebarOpen(true)} aria-label="Abrir menú de biblioteca"><Menu /><span>Menú</span></button>
+
         <header className="library-header">
           <div><span className="eyebrow">{section === 'library' ? 'TU ESPACIO DE LECTURA' : section === 'public' ? 'DESCUBRE Y AÑADE' : 'DE OTROS USUARIOS PARA TI'}</span><h1>{title}</h1><p>{description}</p></div>
           {section === 'library' && <><button className="primary-button" onClick={() => fileRef.current?.click()} disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Añadir EPUB</button><input ref={fileRef} type="file" accept=".epub,application/epub+zip" multiple hidden onChange={handleFiles} /></>}
