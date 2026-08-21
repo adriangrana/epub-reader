@@ -8,6 +8,7 @@ import './mobile-library.css';
 import './library-experience.css';
 import './markdown-description.css';
 import './cover-polish.css';
+import './library-responsive.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
