@@ -62,8 +62,125 @@
   width: 132px;
 }
 
+.narration-choice-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 6, 14, .74);
+  backdrop-filter: blur(10px);
+}
+
+.narration-choice {
+  position: relative;
+  width: min(560px, 100%);
+  padding: 34px;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(140, 108, 255, .15), transparent 30%),
+    linear-gradient(155deg, #151b2e, #0b101e 72%);
+  box-shadow: 0 34px 110px rgba(0, 0, 0, .58);
+}
+
+.narration-choice-icon {
+  width: 52px;
+  height: 52px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(140, 108, 255, .22);
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  color: #cbbfff;
+  background: linear-gradient(145deg, rgba(140, 108, 255, .18), rgba(101, 217, 233, .08));
+  box-shadow: 0 12px 36px rgba(82, 58, 190, .18);
+}
+
+.narration-choice-icon svg {
+  width: 22px;
+}
+
+.narration-choice h2 {
+  margin: 9px 0 10px;
+  font-family: 'Playfair Display', serif;
+  font-size: 29px;
+  font-weight: 600;
+}
+
+.narration-choice > p {
+  margin: 0;
+  max-width: 470px;
+  color: #8d97af;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.narration-choice-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.resume-option {
+  width: 100%;
+  min-height: 72px;
+  padding: 13px 15px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 14px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: #cfd5e5;
+  background: rgba(255, 255, 255, .025);
+  cursor: pointer;
+  text-align: left;
+  transition: transform .16s ease, border-color .16s ease, background .16s ease;
+}
+
+.resume-option:hover {
+  transform: translateY(-1px);
+  border-color: rgba(140, 108, 255, .32);
+  background: rgba(140, 108, 255, .07);
+}
+
+.resume-option.primary {
+  border-color: rgba(140, 108, 255, .25);
+  background: linear-gradient(90deg, rgba(140, 108, 255, .13), rgba(101, 217, 233, .035));
+}
+
+.resume-option > svg {
+  width: 20px;
+  color: #a996ff;
+  justify-self: center;
+}
+
+.resume-option span,
+.resume-option strong,
+.resume-option small {
+  display: block;
+}
+
+.resume-option strong {
+  color: #eef0f8;
+  font-size: 12px;
+}
+
+.resume-option small {
+  margin-top: 4px;
+  color: #77829b;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 @media (max-width: 900px) {
   .paper {
     width: 100%;
+  }
+
+  .narration-choice {
+    padding: 28px 22px 22px;
   }
 }
