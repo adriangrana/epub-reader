@@ -28,6 +28,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const renditionRef = useRef<Rendition | null>(null);
   const speechQueueRef = useRef<string[]>([]);
   const speechIndexRef = useRef(0);
+  const progressRef = useRef(record.progress ?? 0);
   const [toc, setToc] = useState<TocItem[]>([]);
   const [tocOpen, setTocOpen] = useState(false);
   const [progress, setProgress] = useState(record.progress ?? 0);
@@ -67,6 +68,8 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     let disposed = false;
     let book: Book | null = null;
     let rendition: Rendition | null = null;
+    progressRef.current = record.progress ?? 0;
+    setProgress(progressRef.current);
 
     const initialise = async () => {
       setLoading(true);
@@ -99,9 +102,10 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
         rendition.on('relocated', (location: { start?: { cfi?: string } }) => {
           const cfi = location.start?.cfi;
           if (!cfi || disposed || !book) return;
-          let percentage = progress;
+          let percentage = progressRef.current;
           try { percentage = book.locations.percentageFromCfi(cfi); } catch { /* preserve last percentage */ }
           percentage = Math.max(0, Math.min(1, percentage));
+          progressRef.current = percentage;
           setProgress(percentage);
           onProgress(record.id, cfi, percentage);
           updateProgress(record.id, cfi, percentage).catch(() => setError('No se pudo guardar el progreso de lectura.'));
