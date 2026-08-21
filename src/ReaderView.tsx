@@ -11,6 +11,7 @@ type TocItem = { label?: string; href: string; subitems?: TocItem[] };
 type NarrationCheckpoint = { cfi: string; offset: number; updatedAt: number };
 type SpeechToken = { start: number; end: number; range: Range; document: Document };
 type SpeechPage = { text: string; tokens: SpeechToken[] };
+type PageLocation = { start?: { cfi?: string }; end?: { cfi?: string } };
 
 type Props = {
   record: LibraryBook;
@@ -31,40 +32,35 @@ function delay(ms: number) {
 
 async function waitForPagePaint() {
   await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-  await delay(45);
+  await delay(65);
 }
 
-function currentCfi(rendition: Rendition | null): string {
-  if (!rendition) return '';
+function pageLocation(rendition: Rendition | null): PageLocation {
+  if (!rendition) return {};
   try {
-    const location = rendition.currentLocation() as { start?: { cfi?: string } } | undefined;
-    return location?.start?.cfi ?? '';
+    return (rendition.location ?? {}) as PageLocation;
   } catch {
-    return '';
+    return {};
   }
 }
 
-function rangeIsVisible(range: Range, width: number, height: number) {
-  return Array.from(range.getClientRects()).some((rect) => (
-    rect.width > 0 && rect.height > 0
-    && rect.right > 0 && rect.left < width
-    && rect.bottom > 0 && rect.top < height
-  ));
+function currentCfi(rendition: Rendition | null): string {
+  return pageLocation(rendition).start?.cfi ?? '';
 }
 
 function visibleSpeechPage(rendition: Rendition): SpeechPage {
   const tokens: SpeechToken[] = [];
   let text = '';
+  const location = pageLocation(rendition);
+  const startCfi = location.start?.cfi ?? '';
+  const endCfi = location.end?.cfi ?? '';
 
   for (const content of rendition.getContents()) {
     const document = content.document;
     const root = document.body;
-    const view = document.defaultView;
-    if (!root || !view) continue;
+    if (!root) continue;
 
-    const width = view.innerWidth || document.documentElement.clientWidth;
-    const height = view.innerHeight || document.documentElement.clientHeight;
-    const walker = document.createTreeWalker(root, 4);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
 
     while (node) {
@@ -77,7 +73,23 @@ function visibleSpeechPage(rendition: Rendition): SpeechPage {
           const range = document.createRange();
           range.setStart(node, localStart);
           range.setEnd(node, localEnd);
-          if (!rangeIsVisible(range, width, height)) continue;
+
+          // epub.js paginates a chapter with CSS columns. Geometry inside the
+          // iframe can make words from neighbouring columns look "visible".
+          // Compare each word CFI against the exact start/end CFI reported for
+          // the rendered page instead, so narration cannot leak into page N+1.
+          if (startCfi || endCfi) {
+            try {
+              const point = range.cloneRange();
+              point.collapse(true);
+              const tokenCfi = content.cfiFromRange(point);
+              if (startCfi && rendition.epubcfi.compare(tokenCfi, startCfi) < 0) continue;
+              if (endCfi && rendition.epubcfi.compare(tokenCfi, endCfi) > 0) continue;
+            } catch {
+              // If a malformed EPUB cannot map one word to CFI, keep that word
+              // rather than making the whole page unnarratable.
+            }
+          }
 
           if (text) text += ' ';
           const start = text.length;
@@ -203,7 +215,9 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     let active = true;
     getCurrentUser().then((user) => {
       if (!active || !user) return;
-      const key = `luma:narration:${user.id}:${record.id}`;
+      // v2 intentionally ignores checkpoints created by the previous page
+      // detector, because those offsets could point into the next CSS column.
+      const key = `luma:narration:v2:${user.id}:${record.id}`;
       checkpointKeyRef.current = key;
       try {
         const raw = localStorage.getItem(key);
@@ -549,7 +563,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
               <MapPin /><span><strong>Continuar donde lo dejé</strong><small>Recupera la página y la palabra aproximada.</small></span>
             </button>
             <button className="resume-option" onClick={() => { void beginFromCurrentPage(); }}>
-              <BookOpenCheck /><span><strong>Empezar esta página</strong><small>Lee solamente desde la página visible actual.</small></span>
+              <BookOpenCheck /><span><strong>Empezar esta página</strong><small>Lee desde la página visible actual.</small></span>
             </button>
           </div>
         </section>
