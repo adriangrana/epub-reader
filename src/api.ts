@@ -20,6 +20,7 @@ export type LibraryBook = {
   shareId?: string;
   sharedBy?: string;
   sharedByEmail?: string;
+  canEdit?: boolean;
 };
 
 type ApiErrorBody = { error?: string };
@@ -102,10 +103,7 @@ export async function uploadBook(file: File, metadata: { title: string; author: 
   });
 
   if (metadata.cover && !response.book.hasCover) {
-    await request<{ ok: true }>(`/api/books/${encodeURIComponent(response.book.id)}/cover`, {
-      method: 'PUT',
-      body: JSON.stringify({ cover: metadata.cover }),
-    });
+    await updateBookCover(response.book.id, metadata.cover);
     response.book.hasCover = true;
   }
 
@@ -116,6 +114,28 @@ export async function setBookVisibility(bookId: string, visibility: 'private' | 
   return (await request<{ book: LibraryBook }>(`/api/library/${encodeURIComponent(bookId)}/visibility`, {
     method: 'PATCH', body: JSON.stringify({ visibility }),
   })).book;
+}
+
+export async function updateBookDescription(bookId: string, description: string): Promise<LibraryBook> {
+  return (await request<{ book: LibraryBook }>(`/api/library/${encodeURIComponent(bookId)}/metadata`, {
+    method: 'PATCH', body: JSON.stringify({ description }),
+  })).book;
+}
+
+export async function replaceBookEpub(bookId: string, file: File): Promise<LibraryBook> {
+  const params = new URLSearchParams({ fileName: file.name });
+  return (await request<{ book: LibraryBook }>(`/api/library/${encodeURIComponent(bookId)}/file?${params}`, {
+    method: 'PUT',
+    body: file,
+    headers: { 'Content-Type': 'application/epub+zip' },
+  })).book;
+}
+
+export async function updateBookCover(bookId: string, cover: string): Promise<void> {
+  await request<{ ok: true }>(`/api/books/${encodeURIComponent(bookId)}/cover`, {
+    method: 'PUT',
+    body: JSON.stringify({ cover }),
+  });
 }
 
 export async function shareBook(bookId: string, email: string): Promise<{ alreadyInLibrary?: boolean; recipient?: { name: string; email: string } }> {
