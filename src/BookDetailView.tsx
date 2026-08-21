@@ -58,17 +58,17 @@ export default function BookDetailView({
   }, [book]);
 
   const replaceLocalBook = (next: LibraryBook) => {
-    // Keep the parent library object coherent without forcing a full reload.
     Object.assign(book, next);
     setCurrentBook({ ...next });
   };
 
   const image = coverUrl(currentBook);
-  const percent = Math.max(0, Math.min(100, Math.round((currentBook.progress ?? 0) * 100)));
-  const isFinished = percent >= 100;
-  const hasProgress = percent >= 1 && !isFinished;
-  const status = isFinished ? 'Leído' : hasProgress ? 'En lectura' : 'Sin comenzar';
-  const readLabel = isFinished ? 'Volver a leer' : hasProgress ? 'Continuar leyendo' : 'Empezar a leer';
+  const progress = Math.max(0, Math.min(1, Number(currentBook.progress ?? 0)));
+  const isFinished = progress >= .999;
+  const hasProgress = progress >= .01 && !isFinished;
+  const percent = isFinished ? 100 : Math.min(99, Math.round(progress * 100));
+  const status = isFinished ? 'Completado' : hasProgress ? 'En lectura' : 'Sin comenzar';
+  const readLabel = isFinished ? 'Leer de nuevo' : hasProgress ? 'Continuar leyendo' : 'Empezar a leer';
   const canEdit = context === 'library' && Boolean(currentBook.canEdit);
 
   const saveDescription = async () => {
@@ -97,6 +97,11 @@ export default function BookDetailView({
       return;
     }
 
+    const confirmed = window.confirm(
+      '¿Quieres sustituir el EPUB actual? Se conservarán el libro, su visibilidad y sus comparticiones, pero se reiniciará el progreso de lectura de todos los usuarios que lo estén leyendo porque las posiciones internas del EPUB pueden cambiar.',
+    );
+    if (!confirmed) return;
+
     setBusyAction('epub');
     setLocalError('');
     setLocalNotice('');
@@ -108,7 +113,7 @@ export default function BookDetailView({
         updated.hasCover = true;
       }
       replaceLocalBook(updated);
-      setLocalNotice('EPUB actualizado correctamente.');
+      setLocalNotice('EPUB actualizado. El progreso de lectura se reinició porque el contenido interno pudo cambiar.');
     } catch (cause) {
       setLocalError(cause instanceof Error ? cause.message : 'No se pudo actualizar el EPUB.');
     } finally {
