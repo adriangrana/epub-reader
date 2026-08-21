@@ -50,6 +50,7 @@ function asBook(row) {
     id: row.id,
     title: row.title,
     author: row.author,
+    description: row.description || '',
     fileName: row.fileName,
     hasCover: Boolean(row.coverPath),
     visibility: row.visibility || 'private',
@@ -66,7 +67,7 @@ function asBook(row) {
 
 function libraryBook(userId, bookId) {
   const row = db.prepare(`
-    SELECT ba.id, ba.title, ba.author, ba.file_name AS fileName, ba.cover_path AS coverPath,
+    SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
            le.visibility, rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
     FROM library_entries le
     JOIN book_assets ba ON ba.id = le.book_id
@@ -185,7 +186,7 @@ const server = createServer(async (req, res) => {
 
     if (pathname === '/api/library' && req.method === 'GET') {
       const rows = db.prepare(`
-        SELECT ba.id, ba.title, ba.author, ba.file_name AS fileName, ba.cover_path AS coverPath,
+        SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
                le.visibility, rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
         FROM library_entries le
         JOIN book_assets ba ON ba.id = le.book_id
@@ -199,21 +200,24 @@ const server = createServer(async (req, res) => {
     if (pathname === '/api/library/upload' && req.method === 'POST') {
       const title = String(url.searchParams.get('title') || '').trim();
       const author = String(url.searchParams.get('author') || '').trim();
+      const description = String(url.searchParams.get('description') || '').trim().slice(0, 5000);
       const fileName = String(url.searchParams.get('fileName') || 'book.epub').trim();
       const data = await readBuffer(req, MAX_EPUB_BYTES);
       if (!data.length || data[0] !== 0x50 || data[1] !== 0x4b) return sendError(res, 400, 'El archivo no parece ser un EPUB válido.');
 
       const fileHash = createHash('sha256').update(data).digest('hex');
-      let asset = db.prepare('SELECT id, cover_path AS coverPath FROM book_assets WHERE file_hash = ?').get(fileHash);
+      let asset = db.prepare('SELECT id, cover_path AS coverPath, description FROM book_assets WHERE file_hash = ?').get(fileHash);
       if (!asset) {
         const id = randomUUID();
         const storedFileName = `${fileHash}.epub`;
         writeFileSync(path.join(BOOKS_DIR, storedFileName), data);
         db.prepare(`
-          INSERT INTO book_assets (id, file_hash, file_name, file_path, title, author, uploaded_by, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, fileHash, fileName || 'book.epub', storedFileName, title || fileName.replace(/\.epub$/i, '') || 'Libro sin título', author || 'Autor desconocido', user.id, Date.now());
-        asset = { id, coverPath: null };
+          INSERT INTO book_assets (id, file_hash, file_name, file_path, title, author, description, uploaded_by, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, fileHash, fileName || 'book.epub', storedFileName, title || fileName.replace(/\.epub$/i, '') || 'Libro sin título', author || 'Autor desconocido', description, user.id, Date.now());
+        asset = { id, coverPath: null, description };
+      } else if (!String(asset.description || '').trim() && description) {
+        db.prepare('UPDATE book_assets SET description = ? WHERE id = ?').run(description, asset.id);
       }
 
       db.prepare(`
@@ -227,7 +231,7 @@ const server = createServer(async (req, res) => {
     if (pathname === '/api/public' && req.method === 'GET') {
       const needle = `%${String(url.searchParams.get('q') || '').trim().toLowerCase()}%`;
       const rows = db.prepare(`
-        SELECT ba.id, ba.title, ba.author, ba.file_name AS fileName, ba.cover_path AS coverPath,
+        SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
                MIN(pub.name) AS publishedBy,
                EXISTS(SELECT 1 FROM library_entries mine WHERE mine.user_id = ? AND mine.book_id = ba.id) AS inLibrary,
                rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
@@ -235,16 +239,16 @@ const server = createServer(async (req, res) => {
         JOIN library_entries public_entry ON public_entry.book_id = ba.id AND public_entry.visibility = 'public'
         JOIN users pub ON pub.id = public_entry.user_id
         LEFT JOIN reading_progress rp ON rp.user_id = ? AND rp.book_id = ba.id
-        WHERE LOWER(ba.title) LIKE ? OR LOWER(ba.author) LIKE ?
+        WHERE LOWER(ba.title) LIKE ? OR LOWER(ba.author) LIKE ? OR LOWER(ba.description) LIKE ?
         GROUP BY ba.id
         ORDER BY ba.created_at DESC
-      `).all(user.id, user.id, needle, needle);
+      `).all(user.id, user.id, needle, needle, needle);
       return sendJson(res, 200, { books: rows.map(asBook) });
     }
 
     if (pathname === '/api/shares' && req.method === 'GET') {
       const rows = db.prepare(`
-        SELECT bs.id AS shareId, ba.id, ba.title, ba.author, ba.file_name AS fileName, ba.cover_path AS coverPath,
+        SELECT bs.id AS shareId, ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
                sender.name AS sharedBy, sender.email AS sharedByEmail,
                rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
         FROM book_shares bs
