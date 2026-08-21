@@ -46,6 +46,9 @@ async function readJson(req) {
 }
 
 function asBook(row) {
+  const progress = Number(row.progress || 0);
+  const roundedPercent = Math.round(progress * 100);
+  const activelyReading = roundedPercent >= 1 && roundedPercent < 100;
   return {
     id: row.id,
     title: row.title,
@@ -54,9 +57,12 @@ function asBook(row) {
     fileName: row.fileName,
     hasCover: Boolean(row.coverPath),
     visibility: row.visibility || 'private',
-    progress: Number(row.progress || 0),
+    progress,
     cfi: row.cfi || undefined,
-    lastOpenedAt: row.lastOpenedAt ? Number(row.lastOpenedAt) : undefined,
+    // Opening a book is not enough to make it appear in "Leyendo ahora".
+    // Only real reading progress between 1% and 99% exposes lastOpenedAt.
+    lastOpenedAt: activelyReading && row.lastOpenedAt ? Number(row.lastOpenedAt) : undefined,
+    canEdit: Boolean(row.canEdit),
     publishedBy: row.publishedBy || undefined,
     inLibrary: row.inLibrary === undefined ? undefined : Boolean(row.inLibrary),
     shareId: row.shareId || undefined,
@@ -68,7 +74,8 @@ function asBook(row) {
 function libraryBook(userId, bookId) {
   const row = db.prepare(`
     SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
-           le.visibility, rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
+           le.visibility, rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt,
+           (ba.uploaded_by = le.user_id) AS canEdit
     FROM library_entries le
     JOIN book_assets ba ON ba.id = le.book_id
     LEFT JOIN reading_progress rp ON rp.user_id = le.user_id AND rp.book_id = ba.id
@@ -88,6 +95,15 @@ function canAccessBook(userId, bookId) {
 
 function ownsLibraryEntry(userId, bookId) {
   return Boolean(db.prepare('SELECT 1 FROM library_entries WHERE user_id = ? AND book_id = ?').get(userId, bookId));
+}
+
+function canEditBook(userId, bookId) {
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM book_assets ba
+    JOIN library_entries le ON le.book_id = ba.id AND le.user_id = ?
+    WHERE ba.id = ? AND ba.uploaded_by = ?
+  `).get(userId, bookId, userId));
 }
 
 function safeUnlink(filePath) {
@@ -187,7 +203,8 @@ const server = createServer(async (req, res) => {
     if (pathname === '/api/library' && req.method === 'GET') {
       const rows = db.prepare(`
         SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
-               le.visibility, rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
+               le.visibility, rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt,
+               (ba.uploaded_by = le.user_id) AS canEdit
         FROM library_entries le
         JOIN book_assets ba ON ba.id = le.book_id
         LEFT JOIN reading_progress rp ON rp.user_id = le.user_id AND rp.book_id = ba.id
@@ -234,7 +251,8 @@ const server = createServer(async (req, res) => {
         SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
                MIN(pub.name) AS publishedBy,
                EXISTS(SELECT 1 FROM library_entries mine WHERE mine.user_id = ? AND mine.book_id = ba.id) AS inLibrary,
-               rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
+               rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt,
+               (ba.uploaded_by = ?) AS canEdit
         FROM book_assets ba
         JOIN library_entries public_entry ON public_entry.book_id = ba.id AND public_entry.visibility = 'public'
         JOIN users pub ON pub.id = public_entry.user_id
@@ -242,7 +260,7 @@ const server = createServer(async (req, res) => {
         WHERE LOWER(ba.title) LIKE ? OR LOWER(ba.author) LIKE ? OR LOWER(ba.description) LIKE ?
         GROUP BY ba.id
         ORDER BY ba.created_at DESC
-      `).all(user.id, user.id, needle, needle, needle);
+      `).all(user.id, user.id, user.id, needle, needle, needle);
       return sendJson(res, 200, { books: rows.map(asBook) });
     }
 
@@ -250,14 +268,15 @@ const server = createServer(async (req, res) => {
       const rows = db.prepare(`
         SELECT bs.id AS shareId, ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName, ba.cover_path AS coverPath,
                sender.name AS sharedBy, sender.email AS sharedByEmail,
-               rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt
+               rp.cfi, rp.percentage AS progress, rp.last_opened_at AS lastOpenedAt,
+               (ba.uploaded_by = ?) AS canEdit
         FROM book_shares bs
         JOIN book_assets ba ON ba.id = bs.book_id
         JOIN users sender ON sender.id = bs.shared_by
         LEFT JOIN reading_progress rp ON rp.user_id = bs.shared_with AND rp.book_id = ba.id
         WHERE bs.shared_with = ?
         ORDER BY bs.created_at DESC
-      `).all(user.id);
+      `).all(user.id, user.id);
       return sendJson(res, 200, { books: rows.map(asBook) });
     }
 
@@ -269,6 +288,44 @@ const server = createServer(async (req, res) => {
       if (!visibility) return sendError(res, 400, 'Visibilidad inválida.');
       const result = db.prepare('UPDATE library_entries SET visibility = ? WHERE user_id = ? AND book_id = ?').run(visibility, user.id, bookId);
       if (!Number(result.changes)) return sendError(res, 404, 'Libro no encontrado en tu biblioteca.');
+      return sendJson(res, 200, { book: libraryBook(user.id, bookId) });
+    }
+
+    match = pathname.match(/^\/api\/library\/([^/]+)\/metadata$/);
+    if (match && req.method === 'PATCH') {
+      const bookId = decodeURIComponent(match[1]);
+      if (!canEditBook(user.id, bookId)) return sendError(res, 403, 'Solo quien importó el EPUB puede editar sus datos.');
+      const body = await readJson(req);
+      const description = String(body.description ?? '').trim().slice(0, 5000);
+      db.prepare('UPDATE book_assets SET description = ? WHERE id = ?').run(description, bookId);
+      return sendJson(res, 200, { book: libraryBook(user.id, bookId) });
+    }
+
+    match = pathname.match(/^\/api\/library\/([^/]+)\/file$/);
+    if (match && req.method === 'PUT') {
+      const bookId = decodeURIComponent(match[1]);
+      if (!canEditBook(user.id, bookId)) return sendError(res, 403, 'Solo quien importó el EPUB puede actualizar el archivo.');
+      const fileName = String(url.searchParams.get('fileName') || 'book.epub').trim() || 'book.epub';
+      const data = await readBuffer(req, MAX_EPUB_BYTES);
+      if (!data.length || data[0] !== 0x50 || data[1] !== 0x4b) return sendError(res, 400, 'El archivo no parece ser un EPUB válido.');
+
+      const current = db.prepare('SELECT file_hash AS fileHash, file_path AS filePath FROM book_assets WHERE id = ?').get(bookId);
+      if (!current) return sendError(res, 404, 'Libro no encontrado.');
+
+      const fileHash = createHash('sha256').update(data).digest('hex');
+      const duplicate = db.prepare('SELECT id FROM book_assets WHERE file_hash = ? AND id <> ?').get(fileHash, bookId);
+      if (duplicate) return sendError(res, 409, 'Ese mismo EPUB ya existe como otro libro en Luma.');
+
+      if (fileHash !== current.fileHash) {
+        const storedFileName = `${fileHash}.epub`;
+        writeFileSync(path.join(BOOKS_DIR, storedFileName), data);
+        db.prepare('UPDATE book_assets SET file_hash = ?, file_name = ?, file_path = ? WHERE id = ?')
+          .run(fileHash, fileName, storedFileName, bookId);
+        if (current.filePath !== storedFileName) safeUnlink(path.join(BOOKS_DIR, current.filePath));
+      } else {
+        db.prepare('UPDATE book_assets SET file_name = ? WHERE id = ?').run(fileName, bookId);
+      }
+
       return sendJson(res, 200, { book: libraryBook(user.id, bookId) });
     }
 
