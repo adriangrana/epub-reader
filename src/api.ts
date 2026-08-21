@@ -124,7 +124,7 @@ export async function updateBookDescription(bookId: string, description: string)
 
 export async function replaceBookEpub(bookId: string, file: File): Promise<LibraryBook> {
   const params = new URLSearchParams({ fileName: file.name });
-  return (await request<{ book: LibraryBook }>(`/api/library/${encodeURIComponent(bookId)}/file?${params}`, {
+  return (await request<{ book: LibraryBook }>(`/api/books/${encodeURIComponent(bookId)}/file?${params}`, {
     method: 'PUT',
     body: file,
     headers: { 'Content-Type': 'application/epub+zip' },
