@@ -32,8 +32,12 @@ function Ensure-RunaraDaemon([string]$RunaraCommand) {
   }
 }
 
-function Upsert-AppProcess([string]$RunaraCommand, [string]$NodeCommand) {
-  $command = "`"$NodeCommand`" server/index.mjs"
+function Upsert-AppProcess([string]$RunaraCommand) {
+  # Runara persiste el comando como texto y luego lo ejecuta mediante shell.
+  # Usamos el nombre disponible en PATH en lugar de la ruta absoluta de node
+  # porque una ruta como C:\Program Files\nodejs\node.exe se fragmenta al
+  # pasar por el parser CLI de Runara.
+  $command = 'node server/index.mjs'
 
   if (Test-RunaraProcess $AppProcess $RunaraCommand) {
     Write-Host "Actualizando proceso Runara '$AppProcess'..."
@@ -50,8 +54,10 @@ function Upsert-AppProcess([string]$RunaraCommand, [string]$NodeCommand) {
   if ($LASTEXITCODE -ne 0) { throw "No se pudo crear '$AppProcess'." }
 }
 
-function Ensure-TunnelProcess([string]$RunaraCommand, [string]$CloudflaredCommand) {
-  $command = "`"$CloudflaredCommand`" tunnel --no-autoupdate --url http://127.0.0.1:$Port"
+function Ensure-TunnelProcess([string]$RunaraCommand) {
+  # Igual que con node: cloudflared ya fue validado en PATH, por lo que no
+  # guardamos su ruta absoluta dentro del comando persistido por Runara.
+  $command = "cloudflared tunnel --no-autoupdate --url http://127.0.0.1:$Port"
 
   if (Test-RunaraProcess $TunnelProcess $RunaraCommand) {
     Write-Host "El proceso '$TunnelProcess' ya existe. Se conserva para no cambiar innecesariamente la URL temporal."
@@ -70,8 +76,8 @@ function Ensure-TunnelProcess([string]$RunaraCommand, [string]$CloudflaredComman
 }
 
 $runara = Require-Command 'runara'
-$node = Require-Command 'node'
-$cloudflared = Require-Command 'cloudflared'
+Require-Command 'node' | Out-Null
+Require-Command 'cloudflared' | Out-Null
 
 $distSource = Join-Path $SourceRoot 'dist'
 $serverSource = Join-Path $SourceRoot 'server'
@@ -100,7 +106,7 @@ if (Test-Path (Join-Path $SourceRoot 'package-lock.json')) {
 }
 
 Ensure-RunaraDaemon $runara
-Upsert-AppProcess $runara $node
+Upsert-AppProcess $runara
 
 Write-Host 'Comprobando healthcheck local...'
 $healthy = $false
@@ -119,7 +125,7 @@ if (-not $healthy) {
   throw "Luma no respondio correctamente en http://127.0.0.1:$Port/api/health. Revisa: runara logs $AppProcess --err --lines 100"
 }
 
-Ensure-TunnelProcess $runara $cloudflared
+Ensure-TunnelProcess $runara
 
 Write-Host ''
 Write-Host 'Deploy completado.' -ForegroundColor Green
