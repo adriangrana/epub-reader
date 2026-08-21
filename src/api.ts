@@ -69,7 +69,7 @@ export async function login(email: string, password: string): Promise<User> {
 }
 
 export async function logout(): Promise<void> {
-  await request('/api/auth/logout', { method: 'POST' });
+  await request<{ ok: true }>('/api/auth/logout', { method: 'POST' });
 }
 
 export async function getLibrary(): Promise<LibraryBook[]> {
@@ -96,7 +96,7 @@ export async function uploadBook(file: File, metadata: { title: string; author: 
   });
 
   if (metadata.cover && !response.book.hasCover) {
-    await request(`/api/books/${encodeURIComponent(response.book.id)}/cover`, {
+    await request<{ ok: true }>(`/api/books/${encodeURIComponent(response.book.id)}/cover`, {
       method: 'PUT',
       body: JSON.stringify({ cover: metadata.cover }),
     });
@@ -113,13 +113,13 @@ export async function setBookVisibility(bookId: string, visibility: 'private' | 
 }
 
 export async function shareBook(bookId: string, email: string): Promise<{ alreadyInLibrary?: boolean; recipient?: { name: string; email: string } }> {
-  return request(`/api/library/${encodeURIComponent(bookId)}/share`, {
+  return request<{ alreadyInLibrary?: boolean; recipient?: { name: string; email: string } }>(`/api/library/${encodeURIComponent(bookId)}/share`, {
     method: 'POST', body: JSON.stringify({ email }),
   });
 }
 
 export async function removeBookFromLibrary(bookId: string): Promise<void> {
-  await request(`/api/library/${encodeURIComponent(bookId)}`, { method: 'DELETE' });
+  await request<{ ok: true }>(`/api/library/${encodeURIComponent(bookId)}`, { method: 'DELETE' });
 }
 
 export async function addPublicBook(bookId: string): Promise<LibraryBook> {
@@ -131,11 +131,11 @@ export async function acceptShare(shareId: string): Promise<LibraryBook> {
 }
 
 export async function dismissShare(shareId: string): Promise<void> {
-  await request(`/api/shares/${encodeURIComponent(shareId)}`, { method: 'DELETE' });
+  await request<{ ok: true }>(`/api/shares/${encodeURIComponent(shareId)}`, { method: 'DELETE' });
 }
 
 export async function updateProgress(bookId: string, cfi: string, percentage: number): Promise<void> {
-  await request(`/api/progress/${encodeURIComponent(bookId)}`, {
+  await request<{ ok: true }>(`/api/progress/${encodeURIComponent(bookId)}`, {
     method: 'PUT', body: JSON.stringify({ cfi, percentage }),
   });
 }
