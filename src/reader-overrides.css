@@ -2,6 +2,25 @@
    Keep the EPUB viewport below epub.js' automatic spread threshold so a
    desktop window still renders as a single book page instead of a two-page spread. */
 
+/* Reuse the public favicon everywhere the Luma brand mark is rendered. */
+.brand-mark {
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.brand-mark > svg {
+  display: none;
+}
+
+.brand-mark::before {
+  content: '';
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: url('/favicon.png') center / contain no-repeat;
+}
+
 .paper {
   width: min(700px, 100%);
 }
