@@ -4,6 +4,7 @@ import App from './App';
 import './styles.css';
 import './reader-overrides.css';
 import './app-overrides.css';
+import './mobile-library.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
