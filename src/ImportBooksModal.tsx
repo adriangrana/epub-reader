@@ -26,7 +26,7 @@ export default function ImportBooksModal({ items, busy, onChange, onCancel, onSu
         <span className="modal-icon"><Upload /></span>
         <span className="eyebrow">AÑADIR A TU BIBLIOTECA</span>
         <h2 id="import-title">Completa los datos del libro</h2>
-        <p className="import-intro">Luma ha leído la metadata del EPUB. Puedes corregir título y autor y añadir una descripción antes de guardarlo.</p>
+        <p className="import-intro">Luma ha leído la metadata del EPUB. Puedes corregir título y autor y añadir una descripción en Markdown antes de guardarlo.</p>
 
         <div className="import-list">
           {items.map((item, index) => (
@@ -40,11 +40,11 @@ export default function ImportBooksModal({ items, busy, onChange, onCancel, onSu
                   <label>Título<input value={item.title} onChange={(event) => onChange(index, { title: event.target.value })} required /></label>
                   <label>Autor<input value={item.author} onChange={(event) => onChange(index, { author: event.target.value })} required /></label>
                 </div>
-                <label>Descripción
+                <label>Descripción (Markdown)
                   <textarea
                     value={item.description}
                     onChange={(event) => onChange(index, { description: event.target.value })}
-                    placeholder="Sinopsis, notas sobre la edición o una breve descripción del libro…"
+                    placeholder={'Ej. **Una historia olvidada.**\n\n> Algunas puertas no deberían abrirse.'}
                     maxLength={5000}
                     rows={4}
                   />
