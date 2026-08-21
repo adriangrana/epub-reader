@@ -8,16 +8,18 @@ import {
   getLibrary, getPublicBooks, getShares, LibraryBook, login, logout, register,
   removeBookFromLibrary, setBookVisibility, shareBook, uploadBook, User,
 } from './api';
+import BookDetailView, { BookContext } from './BookDetailView';
 import { readEpubMetadata } from './epubMetadata';
+import ImportBooksModal, { PendingImport } from './ImportBooksModal';
 import ReaderView from './ReaderView';
 
-type Section = 'library' | 'public' | 'shared';
+type Section = BookContext;
 type AuthMode = 'login' | 'register';
 
 type BookCardProps = {
   book: LibraryBook;
   context: Section;
-  onRead: (book: LibraryBook) => void;
+  onSelect: (book: LibraryBook) => void;
   onAdd?: (book: LibraryBook) => void;
   onVisibility?: (book: LibraryBook) => void;
   onShare?: (book: LibraryBook) => void;
@@ -26,18 +28,18 @@ type BookCardProps = {
   onDismiss?: (book: LibraryBook) => void;
 };
 
-function BookCard({ book, context, onRead, onAdd, onVisibility, onShare, onRemove, onAccept, onDismiss }: BookCardProps) {
+function BookCard({ book, context, onSelect, onAdd, onVisibility, onShare, onRemove, onAccept, onDismiss }: BookCardProps) {
   const image = coverUrl(book);
   const percent = Math.round((book.progress ?? 0) * 100);
 
   return (
     <article className="book-card">
-      <button className="cover-button" onClick={() => onRead(book)}>
+      <button className="cover-button" onClick={() => onSelect(book)}>
         <div className="cover">
           {image ? <img src={image} alt={`Portada de ${book.title}`} /> : (
             <div className="cover-fallback"><Sparkles /><strong>{book.title}</strong><span>{book.author}</span></div>
           )}
-          <div className="cover-overlay"><span><BookOpen /> Leer</span></div>
+          <div className="cover-overlay"><span><BookOpen /> Ver detalles</span></div>
           {context === 'library' && <span className={`visibility-pill ${book.visibility}`}>
             {book.visibility === 'public' ? <Globe2 /> : <LockKeyhole />}{book.visibility === 'public' ? 'Público' : 'Privado'}
           </span>}
@@ -45,7 +47,7 @@ function BookCard({ book, context, onRead, onAdd, onVisibility, onShare, onRemov
       </button>
 
       <div className="book-meta">
-        <button className="book-title" onClick={() => onRead(book)}>{book.title}</button>
+        <button className="book-title" onClick={() => onSelect(book)}>{book.title}</button>
         <span>{book.author}</span>
         {context === 'public' && book.publishedBy && <small className="book-context">Publicado por {book.publishedBy}</small>}
         {context === 'shared' && book.sharedBy && <small className="book-context">Compartido por {book.sharedBy}</small>}
@@ -144,6 +146,8 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
   const [reader, setReader] = useState<LibraryBook | null>(null);
+  const [detail, setDetail] = useState<{ book: LibraryBook; context: Section } | null>(null);
+  const [pendingImports, setPendingImports] = useState<PendingImport[]>([]);
   const [shareTarget, setShareTarget] = useState<LibraryBook | null>(null);
   const [shareEmail, setShareEmail] = useState('');
   const [error, setError] = useState('');
@@ -159,6 +163,12 @@ function App() {
       setLibrary(myBooks);
       setPublicBooks(catalog);
       setShares(incoming);
+      setDetail((current) => {
+        if (!current) return current;
+        const source = current.context === 'library' ? myBooks : current.context === 'public' ? catalog : incoming;
+        const fresh = source.find((book) => book.id === current.book.id && (!current.book.shareId || book.shareId === current.book.shareId));
+        return fresh ? { ...current, book: fresh } : current;
+      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo cargar la biblioteca.');
     } finally {
@@ -194,32 +204,71 @@ function App() {
   const filteredBooks = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return currentBooks;
-    return currentBooks.filter((book) => `${book.title} ${book.author} ${book.publishedBy ?? ''} ${book.sharedBy ?? ''}`.toLowerCase().includes(needle));
+    return currentBooks.filter((book) => `${book.title} ${book.author} ${book.description ?? ''} ${book.publishedBy ?? ''} ${book.sharedBy ?? ''}`.toLowerCase().includes(needle));
   }, [currentBooks, query]);
+
+  const currentlyReading = useMemo(() => library
+    .filter((book) => Boolean(book.lastOpenedAt) && (book.progress ?? 0) < 0.999)
+    .sort((a, b) => Number(b.lastOpenedAt || 0) - Number(a.lastOpenedAt || 0))
+    .slice(0, 5), [library]);
 
   const selectSection = (nextSection: Section) => {
     setSection(nextSection);
+    setDetail(null);
     setQuery('');
+    setMobileSidebarOpen(false);
+  };
+
+  const openDetail = (book: LibraryBook, context: Section) => {
+    setDetail({ book, context });
     setMobileSidebarOpen(false);
   };
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []).filter((file) => file.name.toLowerCase().endsWith('.epub'));
+    event.target.value = '';
     if (!files.length) return;
     setBusy(true);
     setError('');
     try {
+      const imports: PendingImport[] = [];
       for (const file of files) {
         const metadata = await readEpubMetadata(file);
-        await uploadBook(file, metadata);
+        imports.push({ file, title: metadata.title, author: metadata.author, cover: metadata.cover, description: '' });
       }
+      setPendingImports(imports);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo leer la metadata de uno de los EPUB.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updatePendingImport = (index: number, patch: Partial<Pick<PendingImport, 'title' | 'author' | 'description'>>) => {
+    setPendingImports((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
+  };
+
+  const submitImports = async () => {
+    if (!pendingImports.length) return;
+    setBusy(true);
+    setError('');
+    try {
+      for (const item of pendingImports) {
+        await uploadBook(item.file, {
+          title: item.title.trim(),
+          author: item.author.trim(),
+          description: item.description.trim(),
+          cover: item.cover,
+        });
+      }
+      const count = pendingImports.length;
+      setPendingImports([]);
       await refreshAll();
-      setNotice(files.length === 1 ? 'Libro guardado en tu biblioteca.' : `${files.length} libros guardados en tu biblioteca.`);
+      setNotice(count === 1 ? 'Libro guardado en tu biblioteca.' : `${count} libros guardados en tu biblioteca.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo importar uno de los EPUB.');
     } finally {
       setBusy(false);
-      event.target.value = '';
     }
   };
 
@@ -228,6 +277,7 @@ function App() {
     try {
       const updated = await setBookVisibility(book.id, next);
       setLibrary((items) => items.map((item) => item.id === book.id ? updated : item));
+      setDetail((current) => current?.book.id === book.id ? { ...current, book: { ...current.book, ...updated } } : current);
       await refreshAll();
       setNotice(next === 'public' ? 'El libro ahora aparece en la biblioteca pública.' : 'El libro vuelve a ser privado.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo cambiar la visibilidad.'); }
@@ -249,6 +299,7 @@ function App() {
   const addFromPublic = async (book: LibraryBook) => {
     try {
       await addPublicBook(book.id);
+      setDetail((current) => current?.book.id === book.id ? { ...current, book: { ...current.book, inLibrary: true } } : current);
       await refreshAll();
       setNotice('Libro añadido a tu biblioteca privada.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo añadir el libro.'); }
@@ -257,8 +308,10 @@ function App() {
   const acceptIncomingShare = async (book: LibraryBook) => {
     if (!book.shareId) return;
     try {
-      await acceptShare(book.shareId);
+      const added = await acceptShare(book.shareId);
       await refreshAll();
+      setSection('library');
+      setDetail({ book: added, context: 'library' });
       setNotice('Libro añadido a tu biblioteca.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo aceptar el libro compartido.'); }
   };
@@ -268,12 +321,14 @@ function App() {
     try {
       await dismissShare(book.shareId);
       setShares((items) => items.filter((item) => item.shareId !== book.shareId));
+      setDetail((current) => current?.book.shareId === book.shareId ? null : current);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo descartar la compartición.'); }
   };
 
   const removeFromLibrary = async (book: LibraryBook) => {
     try {
       await removeBookFromLibrary(book.id);
+      setDetail((current) => current?.book.id === book.id ? null : current);
       await refreshAll();
       setNotice('Libro eliminado de tu biblioteca.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo eliminar el libro.'); }
@@ -285,6 +340,7 @@ function App() {
     setPublicBooks(update);
     setShares(update);
     setReader((current) => current?.id === bookId ? { ...current, cfi, progress } : current);
+    setDetail((current) => current?.book.id === bookId ? { ...current, book: { ...current.book, cfi, progress } } : current);
   };
 
   const handleLogout = async () => {
@@ -294,6 +350,8 @@ function App() {
       setPublicBooks([]);
       setShares([]);
       setReader(null);
+      setDetail(null);
+      setPendingImports([]);
       setMobileSidebarOpen(false);
     }
   };
@@ -323,6 +381,21 @@ function App() {
           <button className={section === 'public' ? 'active' : ''} onClick={() => selectSection('public')}><Globe2 /> Biblioteca pública <span>{publicBooks.length}</span></button>
           <button className={section === 'shared' ? 'active' : ''} onClick={() => selectSection('shared')}><UsersRound /> Compartidos <span>{shares.length}</span></button>
         </nav>
+
+        {currentlyReading.length > 0 && <section className="reading-now">
+          <div className="reading-now-heading"><span>LEYENDO AHORA</span><small>{currentlyReading.length}</small></div>
+          <div className="reading-now-list">
+            {currentlyReading.map((book) => {
+              const image = coverUrl(book);
+              const percent = Math.round((book.progress ?? 0) * 100);
+              return <button key={book.id} className="reading-now-item" onClick={() => { setReader(book); setMobileSidebarOpen(false); }} title={`Continuar ${book.title}`}>
+                <span className="reading-now-cover">{image ? <img src={image} alt="" /> : <BookOpen />}</span>
+                <span className="reading-now-copy"><strong>{book.title}</strong><small>{percent}% leído</small><i><b style={{ width: `${percent}%` }} /></i></span>
+              </button>;
+            })}
+          </div>
+        </section>}
+
         <div className="storage-card"><span>ALMACENAMIENTO LOCAL</span><strong>Los EPUB viven en este equipo.</strong><p>Las cuentas controlan el acceso; el archivo físico se conserva en el servidor Luma.</p></div>
         <div className="account-card"><div className="account-avatar">{user.name.slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><span>{user.email}</span></div><button onClick={handleLogout} title="Cerrar sesión"><LogOut /></button></div>
       </aside>
@@ -332,41 +405,63 @@ function App() {
       <section className="library">
         <button className="mobile-library-menu" onClick={() => setMobileSidebarOpen(true)} aria-label="Abrir menú de biblioteca"><Menu /><span>Menú</span></button>
 
-        <header className="library-header">
-          <div><span className="eyebrow">{section === 'library' ? 'TU ESPACIO DE LECTURA' : section === 'public' ? 'DESCUBRE Y AÑADE' : 'DE OTROS USUARIOS PARA TI'}</span><h1>{title}</h1><p>{description}</p></div>
-          {section === 'library' && <><button className="primary-button" onClick={() => fileRef.current?.click()} disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Añadir EPUB</button><input ref={fileRef} type="file" accept=".epub,application/epub+zip" multiple hidden onChange={handleFiles} /></>}
-        </header>
-
-        {section === 'public' && <div className="public-note"><Globe2 /><span><strong>Catálogo comunitario.</strong> Publica únicamente contenido que tengas derecho a compartir.</span></div>}
-
-        <div className="library-tools">
-          <label className="search-box"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por título, autor o usuario…" /></label>
-          <span>{loadingData ? 'Actualizando…' : `${filteredBooks.length} ${filteredBooks.length === 1 ? 'libro' : 'libros'}`}</span>
-        </div>
-
-        {filteredBooks.length === 0 ? (
-          <section className="empty-state">
-            <div className="empty-orb">{section === 'library' ? <Upload /> : section === 'public' ? <Globe2 /> : <UsersRound />}</div>
-            <span className="eyebrow">{section === 'library' ? 'EMPIEZA TU BIBLIOTECA' : section === 'public' ? 'SIN RESULTADOS' : 'BANDEJA VACÍA'}</span>
-            <h2>{section === 'library' ? 'Tu próxima historia vive aquí.' : section === 'public' ? 'Aún no hay libros públicos aquí.' : 'No tienes libros compartidos pendientes.'}</h2>
-            <p>{section === 'library' ? 'Importa uno o varios EPUB. Se guardarán físicamente en este equipo y quedarán asociados únicamente a tu cuenta.' : section === 'public' ? 'Cuando un usuario haga público un libro, aparecerá en este catálogo y podrás incorporarlo a tu biblioteca.' : 'Cuando otro usuario comparta un libro contigo, podrás leerlo o añadirlo a tu biblioteca personal.'}</p>
-            {section === 'library' && <button className="primary-button large" onClick={() => fileRef.current?.click()} disabled={busy}><Upload /> Seleccionar EPUB</button>}
-          </section>
-        ) : (
-          <section className="book-grid">{filteredBooks.map((book) => <BookCard
-            key={`${section}-${book.shareId ?? book.id}`}
-            book={book}
-            context={section}
+        {detail ? (
+          <BookDetailView
+            book={detail.book}
+            context={detail.context}
+            onBack={() => setDetail(null)}
             onRead={setReader}
             onVisibility={toggleVisibility}
             onShare={(target) => { setShareTarget(target); setShareEmail(''); }}
             onRemove={removeFromLibrary}
             onAdd={addFromPublic}
             onAccept={acceptIncomingShare}
-            onDismiss={dismissIncomingShare}
-          />)}</section>
-        )}
+          />
+        ) : <>
+          <header className="library-header">
+            <div><span className="eyebrow">{section === 'library' ? 'TU ESPACIO DE LECTURA' : section === 'public' ? 'DESCUBRE Y AÑADE' : 'DE OTROS USUARIOS PARA TI'}</span><h1>{title}</h1><p>{description}</p></div>
+            {section === 'library' && <><button className="primary-button" onClick={() => fileRef.current?.click()} disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Añadir EPUB</button><input ref={fileRef} type="file" accept=".epub,application/epub+zip" multiple hidden onChange={handleFiles} /></>}
+          </header>
+
+          {section === 'public' && <div className="public-note"><Globe2 /><span><strong>Catálogo comunitario.</strong> Publica únicamente contenido que tengas derecho a compartir.</span></div>}
+
+          <div className="library-tools">
+            <label className="search-box"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por título, autor, descripción o usuario…" /></label>
+            <span>{loadingData ? 'Actualizando…' : `${filteredBooks.length} ${filteredBooks.length === 1 ? 'libro' : 'libros'}`}</span>
+          </div>
+
+          {filteredBooks.length === 0 ? (
+            <section className="empty-state">
+              <div className="empty-orb">{section === 'library' ? <Upload /> : section === 'public' ? <Globe2 /> : <UsersRound />}</div>
+              <span className="eyebrow">{section === 'library' ? 'EMPIEZA TU BIBLIOTECA' : section === 'public' ? 'SIN RESULTADOS' : 'BANDEJA VACÍA'}</span>
+              <h2>{section === 'library' ? 'Tu próxima historia vive aquí.' : section === 'public' ? 'Aún no hay libros públicos aquí.' : 'No tienes libros compartidos pendientes.'}</h2>
+              <p>{section === 'library' ? 'Importa uno o varios EPUB. Antes de guardarlos podrás revisar título, autor y añadir una descripción.' : section === 'public' ? 'Cuando un usuario haga público un libro, aparecerá en este catálogo y podrás incorporarlo a tu biblioteca.' : 'Cuando otro usuario comparta un libro contigo, podrás revisar su ficha, leerlo o añadirlo a tu biblioteca personal.'}</p>
+              {section === 'library' && <button className="primary-button large" onClick={() => fileRef.current?.click()} disabled={busy}><Upload /> Seleccionar EPUB</button>}
+            </section>
+          ) : (
+            <section className="book-grid">{filteredBooks.map((book) => <BookCard
+              key={`${section}-${book.shareId ?? book.id}`}
+              book={book}
+              context={section}
+              onSelect={(target) => openDetail(target, section)}
+              onVisibility={toggleVisibility}
+              onShare={(target) => { setShareTarget(target); setShareEmail(''); }}
+              onRemove={removeFromLibrary}
+              onAdd={addFromPublic}
+              onAccept={acceptIncomingShare}
+              onDismiss={dismissIncomingShare}
+            />)}</section>
+          )}
+        </>}
       </section>
+
+      {pendingImports.length > 0 && <ImportBooksModal
+        items={pendingImports}
+        busy={busy}
+        onChange={updatePendingImport}
+        onCancel={() => { if (!busy) setPendingImports([]); }}
+        onSubmit={() => { void submitImports(); }}
+      />}
 
       {shareTarget && <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setShareTarget(null); }}>
         <form className="share-modal" onSubmit={submitShare}>
