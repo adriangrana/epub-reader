@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import {
   coverUrl, downloadUrl, LibraryBook, replaceBookEpub, updateBookCover,
-  updateBookDescription, updateProgress,
+  updateBookMetadata, updateProgress,
 } from './api';
 import { readEpubMetadata } from './epubMetadata';
 
@@ -26,7 +26,7 @@ type Props = {
 const editorStyle = {
   width: '100%',
   minHeight: 132,
-  marginTop: 12,
+  marginTop: 7,
   padding: '12px 14px',
   border: '1px solid rgba(255, 255, 255, .09)',
   borderRadius: 12,
@@ -38,21 +38,38 @@ const editorStyle = {
   outline: 'none',
 };
 
+const editorInputStyle = {
+  width: '100%',
+  height: 43,
+  marginTop: 7,
+  padding: '0 13px',
+  border: '1px solid rgba(255, 255, 255, .09)',
+  borderRadius: 11,
+  color: '#e7eaf4',
+  background: 'rgba(255, 255, 255, .025)',
+  font: 'inherit',
+  outline: 'none',
+};
+
 export default function BookDetailView({
   book, context, onBack, onRead, onAdd, onAccept, onVisibility, onShare, onRemove,
 }: Props) {
   const [currentBook, setCurrentBook] = useState(book);
-  const [editingDescription, setEditingDescription] = useState(false);
+  const [editingMetadata, setEditingMetadata] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(book.title);
+  const [authorDraft, setAuthorDraft] = useState(book.author);
   const [descriptionDraft, setDescriptionDraft] = useState(book.description ?? '');
-  const [busyAction, setBusyAction] = useState<'description' | 'epub' | 'restart' | null>(null);
+  const [busyAction, setBusyAction] = useState<'metadata' | 'epub' | 'restart' | null>(null);
   const [localError, setLocalError] = useState('');
   const [localNotice, setLocalNotice] = useState('');
   const epubInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setCurrentBook(book);
+    setTitleDraft(book.title);
+    setAuthorDraft(book.author);
     setDescriptionDraft(book.description ?? '');
-    setEditingDescription(false);
+    setEditingMetadata(false);
     setLocalError('');
     setLocalNotice('');
   }, [book]);
@@ -60,6 +77,23 @@ export default function BookDetailView({
   const replaceLocalBook = (next: LibraryBook) => {
     Object.assign(book, next);
     setCurrentBook({ ...next });
+  };
+
+  const beginEditing = () => {
+    setTitleDraft(currentBook.title);
+    setAuthorDraft(currentBook.author);
+    setDescriptionDraft(currentBook.description ?? '');
+    setEditingMetadata(true);
+    setLocalError('');
+    setLocalNotice('');
+  };
+
+  const cancelEditing = () => {
+    setTitleDraft(currentBook.title);
+    setAuthorDraft(currentBook.author);
+    setDescriptionDraft(currentBook.description ?? '');
+    setEditingMetadata(false);
+    setLocalError('');
   };
 
   const image = coverUrl(currentBook);
@@ -71,18 +105,35 @@ export default function BookDetailView({
   const readLabel = isFinished ? 'Leer de nuevo' : hasProgress ? 'Continuar leyendo' : 'Empezar a leer';
   const canEdit = context === 'library' && Boolean(currentBook.canEdit);
 
-  const saveDescription = async () => {
-    setBusyAction('description');
+  const saveMetadata = async () => {
+    const title = titleDraft.trim();
+    const author = authorDraft.trim();
+    if (!title) {
+      setLocalError('El título no puede quedar vacío.');
+      return;
+    }
+    if (!author) {
+      setLocalError('El autor no puede quedar vacío.');
+      return;
+    }
+
+    setBusyAction('metadata');
     setLocalError('');
     setLocalNotice('');
     try {
-      const updated = await updateBookDescription(currentBook.id, descriptionDraft.trim());
+      const updated = await updateBookMetadata(currentBook.id, {
+        title,
+        author,
+        description: descriptionDraft.trim(),
+      });
       replaceLocalBook(updated);
+      setTitleDraft(updated.title);
+      setAuthorDraft(updated.author);
       setDescriptionDraft(updated.description ?? '');
-      setEditingDescription(false);
-      setLocalNotice('Descripción actualizada.');
+      setEditingMetadata(false);
+      setLocalNotice('Datos del libro actualizados.');
     } catch (cause) {
-      setLocalError(cause instanceof Error ? cause.message : 'No se pudo actualizar la descripción.');
+      setLocalError(cause instanceof Error ? cause.message : 'No se pudieron actualizar los datos del libro.');
     } finally {
       setBusyAction(null);
     }
@@ -184,38 +235,60 @@ export default function BookDetailView({
 
           <div className="detail-description">
             <div className="detail-section-title">
-              <FileText /><span>Descripción</span>
-              {canEdit && !editingDescription && (
+              <FileText /><span>{editingMetadata ? 'Editar datos del libro' : 'Descripción'}</span>
+              {canEdit && !editingMetadata && (
                 <button
                   type="button"
-                  onClick={() => { setDescriptionDraft(currentBook.description ?? ''); setEditingDescription(true); setLocalError(''); }}
-                  title="Editar descripción"
+                  onClick={beginEditing}
+                  title="Editar título, autor y descripción"
                   style={{ marginLeft: 6, border: 0, color: '#9487db', background: 'transparent', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10 }}
                 >
-                  <Pencil size={13} /> Editar
+                  <Pencil size={13} /> Editar datos
                 </button>
               )}
             </div>
 
-            {editingDescription ? (
-              <>
-                <textarea
-                  value={descriptionDraft}
-                  onChange={(event) => setDescriptionDraft(event.target.value.slice(0, 5000))}
-                  maxLength={5000}
-                  style={editorStyle}
-                  autoFocus
-                />
-                <div className="detail-library-actions" style={{ marginTop: 8 }}>
-                  <button type="button" onClick={() => void saveDescription()} disabled={busyAction !== null}>
-                    {busyAction === 'description' ? <LoaderCircle className="spin" /> : <Save />} Guardar
+            {editingMetadata ? (
+              <div style={{ marginTop: 13, display: 'grid', gap: 12 }}>
+                <label style={{ color: '#8d97b1', fontSize: 10, fontWeight: 600 }}>
+                  Título
+                  <input
+                    value={titleDraft}
+                    onChange={(event) => setTitleDraft(event.target.value.slice(0, 300))}
+                    maxLength={300}
+                    style={editorInputStyle}
+                    autoFocus
+                  />
+                </label>
+                <label style={{ color: '#8d97b1', fontSize: 10, fontWeight: 600 }}>
+                  Autor
+                  <input
+                    value={authorDraft}
+                    onChange={(event) => setAuthorDraft(event.target.value.slice(0, 300))}
+                    maxLength={300}
+                    style={editorInputStyle}
+                    placeholder="Ej. Adrian T. Graña"
+                  />
+                </label>
+                <label style={{ color: '#8d97b1', fontSize: 10, fontWeight: 600 }}>
+                  Descripción
+                  <textarea
+                    value={descriptionDraft}
+                    onChange={(event) => setDescriptionDraft(event.target.value.slice(0, 5000))}
+                    maxLength={5000}
+                    style={editorStyle}
+                  />
+                </label>
+                <div className="detail-library-actions" style={{ marginTop: 0 }}>
+                  <button type="button" onClick={() => void saveMetadata()} disabled={busyAction !== null}>
+                    {busyAction === 'metadata' ? <LoaderCircle className="spin" /> : <Save />} Guardar cambios
                   </button>
-                  <button type="button" onClick={() => { setEditingDescription(false); setDescriptionDraft(currentBook.description ?? ''); }} disabled={busyAction !== null}>
+                  <button type="button" onClick={cancelEditing} disabled={busyAction !== null}>
                     <X /> Cancelar
                   </button>
                   <span style={{ marginLeft: 'auto', alignSelf: 'center', color: '#68738d', fontSize: 9 }}>{descriptionDraft.length}/5000</span>
                 </div>
-              </>
+              </div>
             ) : (
               <p>{currentBook.description?.trim() || 'Este libro todavía no tiene una descripción.'}</p>
             )}
@@ -254,7 +327,7 @@ export default function BookDetailView({
               <button onClick={() => onShare?.(currentBook)}><Share2 /> Compartir</button>
               <a href={downloadUrl(currentBook.id)}><Download /> Descargar EPUB</a>
               {canEdit && <>
-                <button onClick={() => setEditingDescription(true)} disabled={busyAction !== null}><FilePenLine /> Editar descripción</button>
+                <button onClick={beginEditing} disabled={busyAction !== null}><FilePenLine /> Editar datos</button>
                 <button onClick={() => epubInputRef.current?.click()} disabled={busyAction !== null}>
                   {busyAction === 'epub' ? <LoaderCircle className="spin" /> : <RefreshCw />} Actualizar EPUB
                 </button>
