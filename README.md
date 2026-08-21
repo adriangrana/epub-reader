@@ -70,6 +70,53 @@ npm start
 
 Después del build, el servidor Node también sirve `dist/`.
 
+## Deploy local con Runara + Cloudflare Quick Tunnel
+
+Requisitos en `PATH`:
+
+- `make`
+- `node`
+- `runara`
+- `cloudflared`
+
+El despliegue se realiza en `C:/www/luma`:
+
+```bash
+make deploy
+```
+
+`make deploy` hace lo siguiente:
+
+1. Ejecuta `npm run build`.
+2. Copia únicamente el `dist/` compilado y el backend `server/` a `C:/www/luma`.
+3. Conserva siempre `C:/www/luma/data`, por lo que no borra usuarios, SQLite, portadas ni EPUB durante un redeploy.
+4. Crea o actualiza en Runara el proceso `luma`, ejecutando `server/index.mjs` desde `C:/www/luma`.
+5. Comprueba `http://127.0.0.1:8787/api/health`.
+6. Crea el proceso `luma-tunnel` con un Cloudflare Quick Tunnel hacia `http://127.0.0.1:8787`.
+7. Si `luma-tunnel` ya está ejecutándose, no lo reinicia para evitar cambiar innecesariamente la URL temporal.
+
+Comandos auxiliares:
+
+```bash
+make restart
+make status
+make logs
+make tunnel-logs
+```
+
+La URL temporal `*.trycloudflare.com` aparece en:
+
+```bash
+make tunnel-logs
+```
+
+Los procesos administrados por Runara son:
+
+```text
+luma         -> node server/index.mjs
+luma-tunnel  -> cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8787
+```
+
 ## Modelo de datos
 
 SQLite mantiene separadas las siguientes responsabilidades:
