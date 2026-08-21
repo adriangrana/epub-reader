@@ -7,6 +7,7 @@ import './app-overrides.css';
 import './mobile-library.css';
 import './library-experience.css';
 import './markdown-description.css';
+import './cover-polish.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
