@@ -127,4 +127,4 @@ Write-Host "Local:   http://127.0.0.1:$Port"
 Write-Host "Datos:   $(Join-Path $DeployDir 'data')"
 Write-Host "App:     runara info $AppProcess"
 Write-Host "Tunnel:  runara info $TunnelProcess"
-Write-Host "URL CF:  runara logs $TunnelProcess --lines 80"
+Write-Host 'URL CF:  make tunnel-logs'
