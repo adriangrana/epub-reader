@@ -22,3 +22,4 @@ logs:
 
 tunnel-logs:
 	runara logs luma-tunnel --lines 80
+	runara logs luma-tunnel --err --lines 80
