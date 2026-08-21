@@ -40,6 +40,7 @@ db.exec(`
     file_path TEXT NOT NULL,
     title TEXT NOT NULL,
     author TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
     cover_path TEXT,
     uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
     created_at INTEGER NOT NULL
@@ -81,8 +82,15 @@ db.exec(`
   );
 `);
 
-// Existing installations may already have reading_progress from the first
-// multi-user version. Keep the migration additive so users do not lose data.
+// Existing installations are migrated additively so a deploy never removes
+// users, books, progress or narration checkpoints.
+const assetColumns = new Set(
+  db.prepare('PRAGMA table_info(book_assets)').all().map((column) => column.name),
+);
+if (!assetColumns.has('description')) {
+  db.exec("ALTER TABLE book_assets ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+}
+
 const progressColumns = new Set(
   db.prepare('PRAGMA table_info(reading_progress)').all().map((column) => column.name),
 );
