@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { createInterface } from 'node:readline/promises';
 import { DatabaseSync } from 'node:sqlite';
 
 function usage(exitCode = 0) {
-  console.log(`Uso:\n  node scripts/book-readers.mjs <titulo> [--db <ruta>]\n\nEjemplos:\n  node scripts/book-readers.mjs "El Archivo de los Olvidados"\n  node scripts/book-readers.mjs "Archivo" --db "C:/www/luma/data/luma.sqlite"`);
+  console.log(`Uso:\n  node scripts/book-readers.mjs [titulo] [--db <ruta>]\n\nEjemplos:\n  node scripts/book-readers.mjs\n  node scripts/book-readers.mjs "El Archivo de los Olvidados"\n  node scripts/book-readers.mjs "Archivo" --db "C:/www/luma/data/luma.sqlite"`);
   process.exit(exitCode);
 }
 
@@ -20,11 +21,8 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-    positional.push(value);
+    if (value.trim()) positional.push(value);
   }
-
-  const title = positional.join(' ').trim();
-  if (!title) usage(1);
 
   if (!dbPath) {
     const deployed = path.resolve('C:/www/luma/data/luma.sqlite');
@@ -32,7 +30,16 @@ function parseArgs(argv) {
     dbPath = existsSync(deployed) ? deployed : local;
   }
 
-  return { title, dbPath: path.resolve(dbPath) };
+  return { title: positional.join(' ').trim(), dbPath: path.resolve(dbPath) };
+}
+
+async function askForTitle() {
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await readline.question('Título del libro: ')).trim();
+  } finally {
+    readline.close();
+  }
 }
 
 function formatDate(timestamp) {
@@ -59,7 +66,12 @@ function percentFromProgress(value) {
   return progress >= 0.999 ? 100 : Math.round(progress * 100);
 }
 
-const { title, dbPath } = parseArgs(process.argv.slice(2));
+let { title, dbPath } = parseArgs(process.argv.slice(2));
+if (!title) title = await askForTitle();
+if (!title) {
+  console.error('Debes indicar un título o parte del título.');
+  process.exit(1);
+}
 
 if (!existsSync(dbPath)) {
   console.error(`No existe la base de datos: ${dbPath}`);
