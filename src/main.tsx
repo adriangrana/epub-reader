@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './narration-preferences';
+import './account-password';
 import './styles.css';
 import './reader-overrides.css';
 import './app-overrides.css';
@@ -11,6 +12,7 @@ import './markdown-description.css';
 import './cover-polish.css';
 import './library-responsive.css';
 import './audio-dock-fix.css';
+import './account-password.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
