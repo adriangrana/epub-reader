@@ -4,9 +4,7 @@ import {
   ArrowLeft, BookOpenCheck, ChevronLeft, ChevronRight, CirclePause, CirclePlay, Headphones,
   LoaderCircle, MapPin, Menu, Sparkles, X,
 } from 'lucide-react';
-import {
-  fetchBookData, getCurrentUser, LibraryBook, LocalNarrationVoice, synthesizeNarration, updateProgress,
-} from './api';
+import { fetchBookData, getCurrentUser, LibraryBook, updateProgress } from './api';
 import { SpeechSegment, splitSpeechSegments } from './speech';
 
 type TocItem = { label?: string; href: string; subitems?: TocItem[] };
@@ -16,25 +14,11 @@ type SpeechPage = { text: string; tokens: SpeechToken[] };
 type PageLocation = { start?: { cfi?: string; href?: string }; end?: { cfi?: string; href?: string } };
 type PageDirection = 'prev' | 'next';
 
-const DAVEFX_VOICE = 'local:davefx';
-const CHATTERBOX_BUILTIN_VOICE = 'local:builtin';
-const SYSTEM_VOICE_PREFIX = 'system:';
-
 type Props = {
   record: LibraryBook;
   onClose: () => void;
   onProgress: (bookId: string, cfi: string, percentage: number) => void;
 };
-
-function localNarrationVoice(value: string): LocalNarrationVoice | null {
-  if (value === DAVEFX_VOICE) return 'davefx';
-  if (value === CHATTERBOX_BUILTIN_VOICE) return 'builtin';
-  return null;
-}
-
-function systemVoiceName(value: string): string {
-  return value.startsWith(SYSTEM_VOICE_PREFIX) ? value.slice(SYSTEM_VOICE_PREFIX.length) : value;
-}
 
 function flattenToc(items: TocItem[], depth = 0): Array<TocItem & { depth: number }> {
   return items.flatMap((item) => [
@@ -116,6 +100,8 @@ function installSwipeGestures(document: Document, onTurnPage: (direction: PageDi
     const horizontalDistance = Math.abs(deltaX);
     const verticalDistance = Math.abs(deltaY);
 
+    // Require a deliberate, mostly-horizontal swipe. This leaves normal taps,
+    // text selection and vertical gestures alone.
     if (elapsed > 900 || horizontalDistance < 55 || horizontalDistance < verticalDistance * 1.25) return;
     onTurnPage(deltaX < 0 ? 'next' : 'prev');
   }, { passive: true });
@@ -235,8 +221,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const speechSegmentIndexRef = useRef(0);
   const speechOffsetRef = useRef(0);
   const speechRunRef = useRef(0);
-  const localAudioRef = useRef<HTMLAudioElement | null>(null);
-  const localAudioUrlRef = useRef<string | null>(null);
   const checkpointKeyRef = useRef<string | null>(null);
   const lastCheckpointWriteRef = useRef(0);
   const autoAdvanceRef = useRef<(runId: number) => Promise<void>>(async () => undefined);
@@ -248,9 +232,8 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const [tocOpen, setTocOpen] = useState(false);
   const [progress, setProgress] = useState(record.progress ?? 0);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [voiceName, setVoiceName] = useState(DAVEFX_VOICE);
+  const [voiceName, setVoiceName] = useState('');
   const [rate, setRate] = useState(1);
-  const [volume, setVolume] = useState(0.75);
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -258,23 +241,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const [savedCheckpoint, setSavedCheckpoint] = useState<NarrationCheckpoint | null>(null);
   const [resumePromptOpen, setResumePromptOpen] = useState(false);
   const [error, setError] = useState('');
-
-  const releaseLocalAudio = useCallback(() => {
-    const audio = localAudioRef.current;
-    if (audio) {
-      audio.onended = null;
-      audio.onerror = null;
-      audio.ontimeupdate = null;
-      try { audio.pause(); } catch { /* already stopped */ }
-      audio.removeAttribute('src');
-      try { audio.load(); } catch { /* no-op */ }
-      localAudioRef.current = null;
-    }
-    if (localAudioUrlRef.current) {
-      URL.revokeObjectURL(localAudioUrlRef.current);
-      localAudioUrlRef.current = null;
-    }
-  }, []);
 
   const persistCheckpoint = useCallback((cfi: string, offset: number, force = false) => {
     const key = checkpointKeyRef.current;
@@ -292,7 +258,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     if (savePosition && speechPageRef.current && currentPageCfiRef.current) {
       persistCheckpoint(currentPageCfiRef.current, speechOffsetRef.current, true);
     }
-    releaseLocalAudio();
     try { window.speechSynthesis.cancel(); } catch { /* browser speech engine unavailable */ }
     clearSpeechHighlight(speechPageRef.current);
     speechPageRef.current = null;
@@ -301,7 +266,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     setSpeaking(false);
     setPaused(false);
     setNarrationPreparing(false);
-  }, [persistCheckpoint, releaseLocalAudio]);
+  }, [persistCheckpoint]);
 
   useEffect(() => {
     let active = true;
@@ -323,7 +288,15 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
   useEffect(() => {
     const synth = window.speechSynthesis;
-    const load = () => setVoices(synth.getVoices());
+    const load = () => {
+      const available = synth.getVoices();
+      setVoices(available);
+      setVoiceName((current) => {
+        if (current) return current;
+        const spanish = available.find((voice) => voice.lang.toLowerCase().startsWith('es'));
+        return (spanish ?? available[0])?.name ?? '';
+      });
+    };
     load();
     synth.addEventListener('voiceschanged', load);
     return () => synth.removeEventListener('voiceschanged', load);
@@ -438,78 +411,13 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     }
 
     speechSegmentIndexRef.current = index;
-    speechOffsetRef.current = segment.start;
-    highlightSpeechOffset(page, segment.start);
-
-    const localVoice = localNarrationVoice(voiceName);
-    if (localVoice) {
-      setNarrationPreparing(true);
-      void (async () => {
-        try {
-          const blob = await synthesizeNarration(record.id, segment.text, localVoice);
-          if (runId !== speechRunRef.current) return;
-
-          releaseLocalAudio();
-          const audioUrl = URL.createObjectURL(blob);
-          const audio = new Audio(audioUrl);
-          localAudioUrlRef.current = audioUrl;
-          localAudioRef.current = audio;
-          audio.volume = volume;
-          audio.playbackRate = rate;
-          audio.preload = 'auto';
-
-          audio.ontimeupdate = () => {
-            if (runId !== speechRunRef.current || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
-            const ratio = Math.max(0, Math.min(1, audio.currentTime / audio.duration));
-            const approximateOffset = Math.min(segment.end, segment.start + Math.floor((segment.end - segment.start) * ratio));
-            speechOffsetRef.current = approximateOffset;
-            highlightSpeechOffset(page, approximateOffset);
-            persistCheckpoint(currentPageCfiRef.current, approximateOffset);
-          };
-
-          audio.onended = () => {
-            if (runId !== speechRunRef.current) return;
-            speechOffsetRef.current = segment.end;
-            persistCheckpoint(currentPageCfiRef.current, segment.end, true);
-            releaseLocalAudio();
-            const nextIndex = index + 1;
-            if (nextIndex < speechSegmentsRef.current.length) {
-              speakSegment(nextIndex, runId);
-              return;
-            }
-            clearSpeechHighlight(page);
-            void autoAdvanceRef.current(runId);
-          };
-
-          audio.onerror = () => {
-            if (runId !== speechRunRef.current) return;
-            releaseLocalAudio();
-            setSpeaking(false);
-            setPaused(false);
-            setNarrationPreparing(false);
-            setError('No se pudo reproducir el audio generado por el narrador IA local.');
-          };
-
-          setNarrationPreparing(false);
-          await audio.play();
-        } catch (cause) {
-          if (runId !== speechRunRef.current) return;
-          releaseLocalAudio();
-          setSpeaking(false);
-          setPaused(false);
-          setNarrationPreparing(false);
-          setError(cause instanceof Error ? cause.message : 'El narrador IA local no está disponible.');
-        }
-      })();
-      return;
-    }
-
     const utterance = new SpeechSynthesisUtterance(segment.text);
-    const selectedVoiceName = systemVoiceName(voiceName);
-    const selectedVoice = voices.find((voice) => voice.name === selectedVoiceName);
+    const selectedVoice = voices.find((voice) => voice.name === voiceName);
     if (selectedVoice) utterance.voice = selectedVoice;
     utterance.rate = rate;
-    utterance.volume = volume;
+
+    speechOffsetRef.current = segment.start;
+    highlightSpeechOffset(page, segment.start);
 
     utterance.onboundary = (event) => {
       if (runId !== speechRunRef.current) return;
@@ -543,7 +451,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     };
 
     window.speechSynthesis.speak(utterance);
-  }, [persistCheckpoint, rate, record.id, releaseLocalAudio, voiceName, voices, volume]);
+  }, [persistCheckpoint, rate, voiceName, voices]);
 
   const startCurrentPageNarration = useCallback(async (offset: number, existingRunId?: number) => {
     const rendition = renditionRef.current;
@@ -553,7 +461,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     if (runId === undefined) {
       speechRunRef.current += 1;
       runId = speechRunRef.current;
-      releaseLocalAudio();
       try { window.speechSynthesis.cancel(); } catch { /* no-op */ }
     }
     if (runId !== speechRunRef.current) return;
@@ -589,7 +496,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     setPaused(false);
     setNarrationPreparing(false);
     speakSegment(0, runId);
-  }, [persistCheckpoint, releaseLocalAudio, speakSegment]);
+  }, [persistCheckpoint, speakSegment]);
 
   useEffect(() => { startPageRef.current = startCurrentPageNarration; }, [startCurrentPageNarration]);
 
@@ -653,20 +560,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
   const requestPlay = () => {
     if (speaking) {
-      const localVoice = localNarrationVoice(voiceName);
-      if (localVoice) {
-        const audio = localAudioRef.current;
-        if (!audio) return;
-        if (paused) {
-          void audio.play();
-          setPaused(false);
-        } else {
-          audio.pause();
-          setPaused(true);
-        }
-        return;
-      }
-
       if (paused) {
         window.speechSynthesis.resume();
         setPaused(false);
@@ -748,19 +641,10 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
       </div>
 
       <footer className="audio-dock">
-        <div className="audio-copy"><span className="audio-icon"><Headphones /></span><div><small>NARRACIÓN CONTINUA</small><strong>{narrationPreparing ? 'Generando narración…' : speaking ? (paused ? 'En pausa' : 'Leyendo y siguiendo el texto') : 'Escuchar el libro'}</strong></div></div>
+        <div className="audio-copy"><span className="audio-icon"><Headphones /></span><div><small>NARRACIÓN CONTINUA</small><strong>{narrationPreparing ? 'Preparando narración…' : speaking ? (paused ? 'En pausa' : 'Leyendo y siguiendo el texto') : 'Escuchar el libro'}</strong></div></div>
         <button className="play-button" onClick={requestPlay} disabled={loading || narrationPreparing} aria-label={paused || !speaking ? 'Reproducir' : 'Pausar'}>{speaking && !paused ? <CirclePause /> : <CirclePlay />}</button>
-        <label className="audio-control">Voz<select value={voiceName} onChange={(event) => { stopSpeech(true); setVoiceName(event.target.value); }}>
-          <optgroup label="IA local">
-            <option value={DAVEFX_VOICE}>DaveFX · IA local</option>
-            <option value={CHATTERBOX_BUILTIN_VOICE}>Chatterbox original · IA local</option>
-          </optgroup>
-          <optgroup label="Voces del sistema">
-            {voices.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={`${SYSTEM_VOICE_PREFIX}${voice.name}`}>{voice.name} · {voice.lang}</option>)}
-          </optgroup>
-        </select></label>
+        <label className="audio-control">Voz<select value={voiceName} onChange={(event) => { stopSpeech(true); setVoiceName(event.target.value); }}>{voices.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} · {voice.lang}</option>)}</select></label>
         <label className="audio-control speed">Velocidad<select value={rate} onChange={(event) => { stopSpeech(true); setRate(Number(event.target.value)); }}><option value={0.8}>0.8×</option><option value={1}>1×</option><option value={1.15}>1.15×</option><option value={1.3}>1.3×</option><option value={1.5}>1.5×</option><option value={1.75}>1.75×</option></select></label>
-        <label className="audio-control volume">Volumen<select value={volume} onChange={(event) => { const nextVolume = Number(event.target.value); setVolume(nextVolume); if (localAudioRef.current) localAudioRef.current.volume = nextVolume; }}><option value={0.5}>50%</option><option value={0.65}>65%</option><option value={0.75}>75%</option><option value={0.85}>85%</option><option value={1}>100%</option></select></label>
         {speaking && <button className="text-button" onClick={() => stopSpeech(true)}>Detener</button>}
       </footer>
 

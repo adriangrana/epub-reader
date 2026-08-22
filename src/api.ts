@@ -23,8 +23,6 @@ export type LibraryBook = {
   canEdit?: boolean;
 };
 
-export type LocalNarrationVoice = 'davefx' | 'builtin';
-
 type ApiErrorBody = { error?: string };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -191,21 +189,6 @@ export async function fetchBookData(bookId: string): Promise<ArrayBuffer> {
     throw new Error(message);
   }
   return response.arrayBuffer();
-}
-
-export async function synthesizeNarration(bookId: string, text: string, voice: LocalNarrationVoice): Promise<Blob> {
-  const response = await fetch(`/api/narration/${encodeURIComponent(bookId)}`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice }),
-  });
-  if (!response.ok) {
-    let message = 'No se pudo generar la narración local.';
-    try { message = (await response.json() as ApiErrorBody).error || message; } catch { /* keep fallback */ }
-    throw new Error(message);
-  }
-  return response.blob();
 }
 
 export function coverUrl(book: Pick<LibraryBook, 'id' | 'hasCover'>): string | undefined {
