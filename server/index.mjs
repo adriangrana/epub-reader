@@ -226,10 +226,6 @@ const server = createServer(async (req, res) => {
         `).run(id, fileHash, fileName || 'book.epub', storedFileName, title || fallbackTitle, author || 'Autor desconocido', description, user.id, Date.now());
         asset = { id, coverPath: null, uploadedBy: user.id, description };
       } else if (asset.uploadedBy === user.id) {
-        // The physical EPUB is deduplicated by SHA-256, but the original uploader
-        // is still allowed to apply the metadata reviewed in the import dialog.
-        // Keep an existing synopsis if the user leaves the import field empty;
-        // clearing it explicitly is available from "Editar datos".
         const nextDescription = description || String(asset.description || '');
         db.prepare('UPDATE book_assets SET title = ?, author = ?, description = ? WHERE id = ?')
           .run(title || fallbackTitle, author || 'Autor desconocido', nextDescription, asset.id);
@@ -417,7 +413,9 @@ const server = createServer(async (req, res) => {
       db.prepare('UPDATE book_assets SET file_hash = ?, file_name = ?, file_path = ? WHERE id = ?')
         .run(fileHash, fileName || 'book.epub', storedFileName, bookId);
       if (asset.filePath !== storedFileName) safeUnlink(path.join(BOOKS_DIR, asset.filePath));
-      db.prepare('DELETE FROM reading_progress WHERE book_id = ?').run(bookId);
+      // Replacing the EPUB must not erase reader history. Keeping the existing
+      // progress also preserves the last known CFI when the new revision keeps
+      // compatible spine/content structure.
       return sendJson(res, 200, { book: libraryBook(user.id, bookId) });
     }
 
