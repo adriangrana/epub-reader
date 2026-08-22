@@ -234,6 +234,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceName, setVoiceName] = useState('');
   const [rate, setRate] = useState(1);
+  const [volume, setVolume] = useState(0.75);
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -415,6 +416,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     const selectedVoice = voices.find((voice) => voice.name === voiceName);
     if (selectedVoice) utterance.voice = selectedVoice;
     utterance.rate = rate;
+    utterance.volume = volume;
 
     speechOffsetRef.current = segment.start;
     highlightSpeechOffset(page, segment.start);
@@ -451,7 +453,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     };
 
     window.speechSynthesis.speak(utterance);
-  }, [persistCheckpoint, rate, voiceName, voices]);
+  }, [persistCheckpoint, rate, voiceName, voices, volume]);
 
   const startCurrentPageNarration = useCallback(async (offset: number, existingRunId?: number) => {
     const rendition = renditionRef.current;
@@ -645,6 +647,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
         <button className="play-button" onClick={requestPlay} disabled={loading || narrationPreparing} aria-label={paused || !speaking ? 'Reproducir' : 'Pausar'}>{speaking && !paused ? <CirclePause /> : <CirclePlay />}</button>
         <label className="audio-control">Voz<select value={voiceName} onChange={(event) => { stopSpeech(true); setVoiceName(event.target.value); }}>{voices.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} · {voice.lang}</option>)}</select></label>
         <label className="audio-control speed">Velocidad<select value={rate} onChange={(event) => { stopSpeech(true); setRate(Number(event.target.value)); }}><option value={0.8}>0.8×</option><option value={1}>1×</option><option value={1.15}>1.15×</option><option value={1.3}>1.3×</option><option value={1.5}>1.5×</option><option value={1.75}>1.75×</option></select></label>
+        <label className="audio-control volume">Volumen<select value={volume} onChange={(event) => { stopSpeech(true); setVolume(Number(event.target.value)); }}><option value={0.5}>50%</option><option value={0.65}>65%</option><option value={0.75}>75%</option><option value={0.85}>85%</option><option value={1}>100%</option></select></label>
         {speaking && <button className="text-button" onClick={() => stopSpeech(true)}>Detener</button>}
       </footer>
 
