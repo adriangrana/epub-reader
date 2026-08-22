@@ -1,4 +1,4 @@
-.PHONY: build deploy restart redeploy status logs tunnel-logs
+.PHONY: build deploy restart redeploy status logs tunnel-logs readers
 
 DEPLOY_DIR := C:/www/luma
 
@@ -23,3 +23,6 @@ logs:
 tunnel-logs:
 	runara logs luma-tunnel --lines 80
 	runara logs luma-tunnel --err --lines 80
+
+readers:
+	node scripts/book-readers.mjs "$(BOOK)" $(if $(DB),--db "$(DB)",)
