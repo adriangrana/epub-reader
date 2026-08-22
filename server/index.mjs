@@ -8,6 +8,8 @@ import { clearSession, createSession, getCurrentUser, hashPassword, verifyPasswo
 const PORT = Number(process.env.PORT || 8787);
 const MAX_EPUB_BYTES = 150 * 1024 * 1024;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
+const MAX_NARRATION_TEXT_CHARS = 700;
+const TTS_URL = String(process.env.LUMA_TTS_URL || 'http://127.0.0.1:8790').replace(/\/+$/, '');
 const DIST_DIR = path.join(process.cwd(), 'dist');
 
 function sendJson(res, status, payload) {
@@ -141,6 +143,35 @@ function serveStatic(url, res) {
   createReadStream(filePath).pipe(res);
 }
 
+async function synthesizeLocalNarration(text, voice) {
+  let response;
+  try {
+    response = await fetch(`${TTS_URL}/synthesize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice }),
+      signal: AbortSignal.timeout(120000),
+    });
+  } catch (error) {
+    throw Object.assign(new Error(`El narrador IA local no está disponible en ${TTS_URL}.`), { statusCode: 503, cause: error });
+  }
+
+  if (!response.ok) {
+    let message = 'El narrador IA local no pudo generar el audio.';
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = String(payload.error);
+    } catch { /* keep fallback */ }
+    throw Object.assign(new Error(message), { statusCode: response.status >= 500 ? 503 : 400 });
+  }
+
+  return {
+    audio: Buffer.from(await response.arrayBuffer()),
+    cache: response.headers.get('x-luma-tts-cache') || 'miss',
+    duration: response.headers.get('x-luma-tts-duration') || '',
+  };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
   const pathname = url.pathname;
@@ -187,6 +218,28 @@ const server = createServer(async (req, res) => {
     if (!user) return sendError(res, 401, 'Necesitas iniciar sesión.');
     if (pathname === '/api/auth/me' && req.method === 'GET') return sendJson(res, 200, { user });
 
+    let match = pathname.match(/^\/api\/narration\/([^/]+)$/);
+    if (match && req.method === 'POST') {
+      const bookId = decodeURIComponent(match[1]);
+      if (!canAccessBook(user.id, bookId)) return sendError(res, 403, 'No tienes acceso a este libro.');
+      const body = await readJson(req);
+      const text = String(body.text || '').replace(/\s+/g, ' ').trim();
+      const voice = body.voice === 'builtin' ? 'builtin' : body.voice === 'davefx' ? 'davefx' : null;
+      if (!text) return sendError(res, 400, 'El fragmento de narración está vacío.');
+      if (text.length > MAX_NARRATION_TEXT_CHARS) return sendError(res, 400, `El fragmento supera ${MAX_NARRATION_TEXT_CHARS} caracteres.`);
+      if (!voice) return sendError(res, 400, 'Voz local no soportada.');
+
+      const result = await synthesizeLocalNarration(text, voice);
+      res.writeHead(200, {
+        'Content-Type': 'audio/wav',
+        'Content-Length': result.audio.length,
+        'Cache-Control': 'private, max-age=31536000, immutable',
+        'X-Luma-TTS-Cache': result.cache,
+        ...(result.duration ? { 'X-Luma-TTS-Duration': result.duration } : {}),
+      });
+      return res.end(result.audio);
+    }
+
     if (pathname === '/api/library' && req.method === 'GET') {
       const rows = db.prepare(`
         SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName,
@@ -226,10 +279,6 @@ const server = createServer(async (req, res) => {
         `).run(id, fileHash, fileName || 'book.epub', storedFileName, title || fallbackTitle, author || 'Autor desconocido', description, user.id, Date.now());
         asset = { id, coverPath: null, uploadedBy: user.id, description };
       } else if (asset.uploadedBy === user.id) {
-        // The physical EPUB is deduplicated by SHA-256, but the original uploader
-        // is still allowed to apply the metadata reviewed in the import dialog.
-        // Keep an existing synopsis if the user leaves the import field empty;
-        // clearing it explicitly is available from "Editar datos".
         const nextDescription = description || String(asset.description || '');
         db.prepare('UPDATE book_assets SET title = ?, author = ?, description = ? WHERE id = ?')
           .run(title || fallbackTitle, author || 'Autor desconocido', nextDescription, asset.id);
@@ -275,7 +324,7 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, { books: rows.map((row) => asBook(row, user.id)) });
     }
 
-    let match = pathname.match(/^\/api\/library\/([^/]+)\/visibility$/);
+    match = pathname.match(/^\/api\/library\/([^/]+)\/visibility$/);
     if (match && req.method === 'PATCH') {
       const bookId = decodeURIComponent(match[1]);
       const body = await readJson(req);
@@ -449,4 +498,5 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Luma server: http://localhost:${PORT}`);
   console.log(`Datos: ${path.dirname(BOOKS_DIR)}`);
+  console.log(`Narrador IA: ${TTS_URL}`);
 });
