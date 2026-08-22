@@ -187,6 +187,27 @@ const server = createServer(async (req, res) => {
     if (!user) return sendError(res, 401, 'Necesitas iniciar sesión.');
     if (pathname === '/api/auth/me' && req.method === 'GET') return sendJson(res, 200, { user });
 
+    if (pathname === '/api/auth/password' && req.method === 'PATCH') {
+      const body = await readJson(req);
+      const currentPassword = String(body.currentPassword || '');
+      const newPassword = String(body.newPassword || '');
+      if (!currentPassword) return sendError(res, 400, 'Introduce tu contraseña actual.');
+      if (newPassword.length < 8) return sendError(res, 400, 'La nueva contraseña debe tener al menos 8 caracteres.');
+      if (newPassword === currentPassword) return sendError(res, 400, 'La nueva contraseña debe ser diferente de la actual.');
+
+      const account = db.prepare('SELECT password_hash AS passwordHash, password_salt AS passwordSalt FROM users WHERE id = ?').get(user.id);
+      if (!account || !(await verifyPassword(currentPassword, account.passwordSalt, account.passwordHash))) {
+        return sendError(res, 401, 'La contraseña actual no es correcta.');
+      }
+
+      const passwordData = await hashPassword(newPassword);
+      db.prepare('UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?')
+        .run(passwordData.hash, passwordData.salt, user.id);
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+      createSession(user.id, res);
+      return sendJson(res, 200, { ok: true });
+    }
+
     if (pathname === '/api/library' && req.method === 'GET') {
       const rows = db.prepare(`
         SELECT ba.id, ba.title, ba.author, ba.description, ba.file_name AS fileName,
