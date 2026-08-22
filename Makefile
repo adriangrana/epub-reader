@@ -1,4 +1,4 @@
-.PHONY: build deploy restart redeploy status logs tunnel-logs readers
+.PHONY: build deploy restart redeploy status logs tunnel-logs readers reset-password
 
 DEPLOY_DIR := C:/www/luma
 
@@ -26,3 +26,6 @@ tunnel-logs:
 
 readers:
 	@node scripts/book-readers.mjs $(if $(BOOK),"$(BOOK)",) $(if $(DB),--db "$(DB)",)
+
+reset-password:
+	@node scripts/reset-password.mjs $(if $(EMAIL),--email "$(EMAIL)",) $(if $(DB),--db "$(DB)",)
