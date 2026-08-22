@@ -99,6 +99,25 @@ def _write_wav(path: Path, waveform: torch.Tensor, sample_rate: int) -> float:
     return len(pcm) / float(sample_rate)
 
 
+def _resolve_voice_path(value: str | Path | None) -> Path | None:
+    if value is None or not str(value).strip():
+        return None
+    path = Path(value).expanduser().resolve()
+    if not path.exists():
+        raise ValueError(f"No existe la muestra de voz: {path}")
+    if not path.is_file():
+        raise ValueError(f"La muestra de voz no es un archivo: {path}")
+    return path
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class Narrator:
     def __init__(self) -> None:
         self._model: ChatterboxMultilingualTTS | None = None
@@ -106,6 +125,7 @@ class Narrator:
         self._generation_lock = threading.Lock()
         self._loaded_at: float | None = None
         self._resolved_model = MODEL_VARIANT if SUPPORTS_MODEL_VARIANT else "installed-default"
+        self._default_conditionals: Any = None
 
     @property
     def loaded(self) -> bool:
@@ -170,6 +190,10 @@ class Narrator:
                 self._model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
                 self._resolved_model = "installed-default"
 
+            # Chatterbox replaces model.conds when a reference voice is used.
+            # Keep the built-in voice conditionals so a later request without
+            # --voice reliably returns to the model's original narrator.
+            self._default_conditionals = self._model.conds
             self._loaded_at = time.time()
             elapsed = time.perf_counter() - started
             print(
@@ -185,6 +209,7 @@ class Narrator:
         exaggeration: float = DEFAULT_EXAGGERATION,
         cfg_weight: float = DEFAULT_CFG_WEIGHT,
         temperature: float = DEFAULT_TEMPERATURE,
+        audio_prompt_path: str | Path | None = None,
     ) -> tuple[Path, bool, float]:
         normalized = " ".join(text.split()).strip()
         if not normalized:
@@ -195,10 +220,12 @@ class Narrator:
         exaggeration = _clamp(exaggeration, 0.25, 1.2, DEFAULT_EXAGGERATION)
         cfg_weight = _clamp(cfg_weight, 0.2, 1.0, DEFAULT_CFG_WEIGHT)
         temperature = _clamp(temperature, 0.1, 1.5, DEFAULT_TEMPERATURE)
+        voice_path = _resolve_voice_path(audio_prompt_path)
+        voice_hash = _file_sha256(voice_path) if voice_path else "builtin"
 
-        # Include both package/API capability and requested model in the cache
-        # identity. If Chatterbox is upgraded later and V3 becomes selectable,
-        # Luma will generate fresh audio rather than reuse legacy checkpoint WAVs.
+        # Include package/model selection and the actual reference-audio bytes in
+        # the cache identity. Renaming a WAV does not duplicate cache entries,
+        # while changing its contents always produces fresh narration.
         identity = {
             "engine": "chatterbox",
             "chatterboxVersion": CHATTERBOX_VERSION,
@@ -206,6 +233,7 @@ class Narrator:
             "requestedModel": MODEL_VARIANT,
             "resolvedModel": MODEL_VARIANT if SUPPORTS_MODEL_VARIANT else "installed-default",
             "language": LANGUAGE_ID,
+            "voice": voice_hash,
             "text": normalized,
             "exaggeration": round(exaggeration, 3),
             "cfgWeight": round(cfg_weight, 3),
@@ -221,11 +249,21 @@ class Narrator:
                 return output, True, _wav_duration(output)
 
             model = self._get_model()
-            print(f"[luma-tts] Generando {len(normalized)} caracteres...", flush=True)
+            if voice_path is None:
+                model.conds = self._default_conditionals
+                voice_label = "voz integrada"
+            else:
+                voice_label = voice_path.name
+
+            print(
+                f"[luma-tts] Generando {len(normalized)} caracteres · voz: {voice_label}...",
+                flush=True,
+            )
             started = time.perf_counter()
             waveform = model.generate(
                 normalized,
                 language_id=LANGUAGE_ID,
+                audio_prompt_path=str(voice_path) if voice_path else None,
                 exaggeration=exaggeration,
                 cfg_weight=cfg_weight,
                 temperature=temperature,
