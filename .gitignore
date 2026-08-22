@@ -5,3 +5,4 @@ data
 .env
 *.local
 .DS_Store
+.venv-tts
