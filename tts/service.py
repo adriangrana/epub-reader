@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import perth
 import torch
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
@@ -29,10 +30,17 @@ DEFAULT_TEMPERATURE = 0.8
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-try:
-    CHATTERBOX_VERSION = version("chatterbox-tts")
-except PackageNotFoundError:
-    CHATTERBOX_VERSION = "unknown"
+
+def _package_version(name: str) -> str:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "unknown"
+
+
+CHATTERBOX_VERSION = _package_version("chatterbox-tts")
+SETUPTOOLS_VERSION = _package_version("setuptools")
+PERTH_VERSION = _package_version("resemble-perth")
 
 
 def _supports_model_variant() -> bool:
@@ -44,6 +52,21 @@ def _supports_model_variant() -> bool:
 
 
 SUPPORTS_MODEL_VARIANT = _supports_model_variant()
+
+
+def _perth_watermarker_available() -> bool:
+    return callable(getattr(perth, "PerthImplicitWatermarker", None))
+
+
+def _require_perth_watermarker() -> None:
+    if _perth_watermarker_available():
+        return
+    raise RuntimeError(
+        "Perth no pudo cargar PerthImplicitWatermarker. En Chatterbox 0.1.x esto suele ocurrir "
+        "cuando setuptools 81+ elimina pkg_resources. Con el entorno .venv-tts activo ejecuta: "
+        "python -m pip install --force-reinstall setuptools==80.9.0 y vuelve a iniciar la prueba. "
+        f"Versiones detectadas: setuptools={SETUPTOOLS_VERSION}, resemble-perth={PERTH_VERSION}."
+    )
 
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
@@ -96,6 +119,9 @@ class Narrator:
             "requestedModel": MODEL_VARIANT,
             "supportsModelVariant": SUPPORTS_MODEL_VARIANT,
             "chatterboxVersion": CHATTERBOX_VERSION,
+            "setuptoolsVersion": SETUPTOOLS_VERSION,
+            "perthVersion": PERTH_VERSION,
+            "perthWatermarkerAvailable": _perth_watermarker_available(),
             "language": LANGUAGE_ID,
             "cudaAvailable": torch.cuda.is_available(),
             "torch": torch.__version__,
@@ -114,6 +140,8 @@ class Narrator:
                 return self._model
             if not torch.cuda.is_available():
                 raise RuntimeError("CUDA no está disponible para el narrador local de Luma.")
+
+            _require_perth_watermarker()
 
             print(
                 f"[luma-tts] Chatterbox {CHATTERBOX_VERSION} · CUDA · RTX · "
@@ -280,6 +308,11 @@ def main() -> None:
     print(
         f"[luma-tts] Chatterbox: {CHATTERBOX_VERSION} · "
         f"selección de modelo: {'sí' if SUPPORTS_MODEL_VARIANT else 'no'}",
+        flush=True,
+    )
+    print(
+        f"[luma-tts] Perth: {PERTH_VERSION} · watermark: "
+        f"{'sí' if _perth_watermarker_available() else 'no'} · setuptools: {SETUPTOOLS_VERSION}",
         flush=True,
     )
     print(f"[luma-tts] CUDA: {torch.cuda.is_available()} · {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No disponible'}", flush=True)
