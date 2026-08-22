@@ -1,4 +1,4 @@
-const CHUNK_SIZE = 1200;
+const CHUNK_SIZE = 560;
 
 export type SpeechSegment = {
   text: string;
