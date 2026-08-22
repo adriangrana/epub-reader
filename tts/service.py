@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import threading
 import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,22 @@ DEFAULT_CFG_WEIGHT = 0.45
 DEFAULT_TEMPERATURE = 0.8
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    CHATTERBOX_VERSION = version("chatterbox-tts")
+except PackageNotFoundError:
+    CHATTERBOX_VERSION = "unknown"
+
+
+def _supports_model_variant() -> bool:
+    """Return whether this installed Chatterbox build accepts t3_model."""
+    try:
+        return "t3_model" in inspect.signature(ChatterboxMultilingualTTS.from_pretrained).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+SUPPORTS_MODEL_VARIANT = _supports_model_variant()
 
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
@@ -64,6 +82,7 @@ class Narrator:
         self._model_lock = threading.Lock()
         self._generation_lock = threading.Lock()
         self._loaded_at: float | None = None
+        self._resolved_model = MODEL_VARIANT if SUPPORTS_MODEL_VARIANT else "installed-default"
 
     @property
     def loaded(self) -> bool:
@@ -73,7 +92,10 @@ class Narrator:
         return {
             "ok": True,
             "modelLoaded": self.loaded,
-            "model": f"chatterbox-multilingual-{MODEL_VARIANT}",
+            "model": f"chatterbox-multilingual-{self._resolved_model}",
+            "requestedModel": MODEL_VARIANT,
+            "supportsModelVariant": SUPPORTS_MODEL_VARIANT,
+            "chatterboxVersion": CHATTERBOX_VERSION,
             "language": LANGUAGE_ID,
             "cudaAvailable": torch.cuda.is_available(),
             "torch": torch.__version__,
@@ -93,15 +115,40 @@ class Narrator:
             if not torch.cuda.is_available():
                 raise RuntimeError("CUDA no está disponible para el narrador local de Luma.")
 
-            print(f"[luma-tts] Cargando Chatterbox Multilingual {MODEL_VARIANT} en CUDA...", flush=True)
-            started = time.perf_counter()
-            self._model = ChatterboxMultilingualTTS.from_pretrained(
-                device="cuda",
-                t3_model=MODEL_VARIANT,
+            print(
+                f"[luma-tts] Chatterbox {CHATTERBOX_VERSION} · CUDA · RTX · "
+                f"modelo solicitado: {MODEL_VARIANT}",
+                flush=True,
             )
+            started = time.perf_counter()
+
+            if SUPPORTS_MODEL_VARIANT:
+                print(f"[luma-tts] Cargando Chatterbox Multilingual {MODEL_VARIANT}...", flush=True)
+                self._model = ChatterboxMultilingualTTS.from_pretrained(
+                    device="cuda",
+                    t3_model=MODEL_VARIANT,
+                )
+                self._resolved_model = MODEL_VARIANT
+            else:
+                # Older PyPI builds expose only from_pretrained(device). They
+                # still provide the multilingual model, but do not allow V2/V3
+                # checkpoint selection. Use that build's default checkpoint
+                # instead of failing with an unexpected keyword argument.
+                print(
+                    "[luma-tts] Esta versión no permite seleccionar t3_model; "
+                    "cargando su checkpoint multilingüe predeterminado.",
+                    flush=True,
+                )
+                self._model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
+                self._resolved_model = "installed-default"
+
             self._loaded_at = time.time()
             elapsed = time.perf_counter() - started
-            print(f"[luma-tts] Modelo listo en {elapsed:.1f}s.", flush=True)
+            print(
+                f"[luma-tts] Modelo listo en {elapsed:.1f}s · "
+                f"resuelto: {self._resolved_model}.",
+                flush=True,
+            )
             return self._model
 
     def synthesize(
@@ -121,9 +168,15 @@ class Narrator:
         cfg_weight = _clamp(cfg_weight, 0.2, 1.0, DEFAULT_CFG_WEIGHT)
         temperature = _clamp(temperature, 0.1, 1.5, DEFAULT_TEMPERATURE)
 
+        # Include both package/API capability and requested model in the cache
+        # identity. If Chatterbox is upgraded later and V3 becomes selectable,
+        # Luma will generate fresh audio rather than reuse legacy checkpoint WAVs.
         identity = {
             "engine": "chatterbox",
-            "model": MODEL_VARIANT,
+            "chatterboxVersion": CHATTERBOX_VERSION,
+            "supportsModelVariant": SUPPORTS_MODEL_VARIANT,
+            "requestedModel": MODEL_VARIANT,
+            "resolvedModel": MODEL_VARIANT if SUPPORTS_MODEL_VARIANT else "installed-default",
             "language": LANGUAGE_ID,
             "text": normalized,
             "exaggeration": round(exaggeration, 3),
@@ -224,6 +277,11 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     print(f"[luma-tts] http://{HOST}:{PORT}", flush=True)
     print(f"[luma-tts] Cache: {CACHE_DIR}", flush=True)
+    print(
+        f"[luma-tts] Chatterbox: {CHATTERBOX_VERSION} · "
+        f"selección de modelo: {'sí' if SUPPORTS_MODEL_VARIANT else 'no'}",
+        flush=True,
+    )
     print(f"[luma-tts] CUDA: {torch.cuda.is_available()} · {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No disponible'}", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     try:
