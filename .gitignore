@@ -8,3 +8,4 @@ data
 .venv-tts
 __pycache__/
 *.pyc
+tts/voices/*
