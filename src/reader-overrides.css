@@ -56,7 +56,8 @@
    visual language as the rest of the reader. */
 @media (min-width: 901px) {
   .audio-dock {
-    grid-template-columns: minmax(220px, 1fr) auto minmax(260px, 340px) 132px auto;
+    grid-template-columns: minmax(210px, 1fr) auto minmax(240px, 320px) 118px 118px auto;
+    gap: 14px;
   }
 }
 
@@ -102,8 +103,9 @@
   background: #0f1627;
 }
 
-.audio-control.speed {
-  width: 132px;
+.audio-control.speed,
+.audio-control.volume {
+  width: 118px;
 }
 
 .narration-choice-backdrop {
