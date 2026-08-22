@@ -149,6 +149,18 @@ class Narrator:
             "language": LANGUAGE_ID,
             "defaultVoice": str(DEFAULT_VOICE_PATH),
             "defaultVoiceAvailable": DEFAULT_VOICE_PATH.is_file(),
+            "voices": [
+                {
+                    "id": "davefx",
+                    "label": "DaveFX",
+                    "available": DEFAULT_VOICE_PATH.is_file(),
+                },
+                {
+                    "id": "builtin",
+                    "label": "Chatterbox original",
+                    "available": True,
+                },
+            ],
             "cudaAvailable": torch.cuda.is_available(),
             "torch": torch.__version__,
             "cudaRuntime": torch.version.cuda,
@@ -209,6 +221,7 @@ class Narrator:
         cfg_weight: float = DEFAULT_CFG_WEIGHT,
         temperature: float = DEFAULT_TEMPERATURE,
         audio_prompt_path: str | Path | None = None,
+        use_builtin_voice: bool = False,
     ) -> tuple[Path, bool, float]:
         normalized = " ".join(text.split()).strip()
         if not normalized:
@@ -220,11 +233,11 @@ class Narrator:
         cfg_weight = _clamp(cfg_weight, 0.2, 1.0, DEFAULT_CFG_WEIGHT)
         temperature = _clamp(temperature, 0.1, 1.5, DEFAULT_TEMPERATURE)
 
-        selected_voice = audio_prompt_path
-        if selected_voice is None and DEFAULT_VOICE_PATH.is_file():
+        selected_voice = None if use_builtin_voice else audio_prompt_path
+        if not use_builtin_voice and selected_voice is None and DEFAULT_VOICE_PATH.is_file():
             selected_voice = DEFAULT_VOICE_PATH
         voice_path = _resolve_voice_path(selected_voice)
-        voice_hash = _file_sha256(voice_path) if voice_path else "builtin"
+        voice_hash = "builtin" if use_builtin_voice else (_file_sha256(voice_path) if voice_path else "builtin")
 
         identity = {
             "engine": "chatterbox",
@@ -249,9 +262,9 @@ class Narrator:
                 return output, True, _wav_duration(output)
 
             model = self._get_model()
-            if voice_path is None:
+            if use_builtin_voice or voice_path is None:
                 model.conds = self._default_conditionals
-                voice_label = "voz integrada"
+                voice_label = "Chatterbox original"
             else:
                 voice_label = voice_path.name
 
@@ -263,7 +276,7 @@ class Narrator:
             waveform = model.generate(
                 normalized,
                 language_id=LANGUAGE_ID,
-                audio_prompt_path=str(voice_path) if voice_path else None,
+                audio_prompt_path=None if use_builtin_voice else (str(voice_path) if voice_path else None),
                 exaggeration=exaggeration,
                 cfg_weight=cfg_weight,
                 temperature=temperature,
@@ -317,11 +330,18 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length)
             payload = json.loads(raw.decode("utf-8"))
             text = str(payload.get("text", ""))
+            voice = str(payload.get("voice", "davefx")).strip().lower()
+            if voice not in {"davefx", "builtin"}:
+                raise ValueError("Voz local no soportada.")
+            if voice == "davefx" and not DEFAULT_VOICE_PATH.is_file():
+                raise ValueError(f"No existe la voz DaveFX en {DEFAULT_VOICE_PATH}")
+
             audio_path, cache_hit, duration = NARRATOR.synthesize(
                 text=text,
                 exaggeration=payload.get("exaggeration", DEFAULT_EXAGGERATION),
                 cfg_weight=payload.get("cfgWeight", DEFAULT_CFG_WEIGHT),
                 temperature=payload.get("temperature", DEFAULT_TEMPERATURE),
+                use_builtin_voice=voice == "builtin",
             )
             audio = audio_path.read_bytes()
 
@@ -354,10 +374,11 @@ def main() -> None:
         flush=True,
     )
     print(
-        f"[luma-tts] Voz predeterminada: "
-        f"{DEFAULT_VOICE_PATH if DEFAULT_VOICE_PATH.is_file() else 'integrada de Chatterbox'}",
+        f"[luma-tts] DaveFX: "
+        f"{DEFAULT_VOICE_PATH if DEFAULT_VOICE_PATH.is_file() else 'no disponible'}",
         flush=True,
     )
+    print("[luma-tts] Chatterbox original: disponible", flush=True)
     print(f"[luma-tts] CUDA: {torch.cuda.is_available()} · {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No disponible'}", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     try:
