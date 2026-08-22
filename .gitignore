@@ -6,3 +6,5 @@ data
 *.local
 .DS_Store
 .venv-tts
+__pycache__/
+*.pyc
