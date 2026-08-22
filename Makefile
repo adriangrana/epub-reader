@@ -25,4 +25,4 @@ tunnel-logs:
 	runara logs luma-tunnel --err --lines 80
 
 readers:
-	node scripts/book-readers.mjs "$(BOOK)" $(if $(DB),--db "$(DB)",)
+	@node scripts/book-readers.mjs $(if $(BOOK),"$(BOOK)",) $(if $(DB),--db "$(DB)",)
