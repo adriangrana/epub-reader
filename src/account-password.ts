@@ -1,3 +1,5 @@
+export {};
+
 const ACCOUNT_CARD_SELECTOR = '.account-card';
 const CHANGE_BUTTON_CLASS = 'account-password-button';
 const MODAL_ID = 'luma-password-modal';
@@ -32,7 +34,7 @@ function makePasswordField(labelText: string, name: string, autoComplete: string
   input.name = name;
   input.required = true;
   input.minLength = 8;
-  input.autocomplete = autoComplete;
+  input.setAttribute('autocomplete', autoComplete);
   label.append(input);
   return { label, input };
 }
