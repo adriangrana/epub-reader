@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from service import NARRATOR
+from service import DEFAULT_VOICE_PATH, NARRATOR
 
 DEFAULT_TEXT = (
     "Kael se quedó inmóvil frente a la puerta. Durante un instante, nadie dijo nada. "
@@ -18,8 +18,11 @@ def main() -> None:
     parser.add_argument("--output", default="data/narration-test.wav", help="Ruta WAV de salida.")
     parser.add_argument(
         "--voice",
-        default=None,
-        help="Archivo de referencia de voz (recomendado WAV limpio). Si se omite, usa la voz integrada.",
+        default=str(DEFAULT_VOICE_PATH) if DEFAULT_VOICE_PATH.is_file() else None,
+        help=(
+            "Archivo de referencia de voz. Por defecto usa tts/voices/davefx.mp3 "
+            "si existe; si no, usa la voz integrada de Chatterbox."
+        ),
     )
     parser.add_argument("--exaggeration", type=float, default=0.45)
     parser.add_argument("--cfg-weight", type=float, default=0.45)
