@@ -21,15 +21,20 @@ def main() -> None:
         default=str(DEFAULT_VOICE_PATH) if DEFAULT_VOICE_PATH.is_file() else None,
         help=(
             "Archivo de referencia de voz. Por defecto usa tts/voices/davefx.mp3 "
-            "si existe; si no, usa la voz integrada de Chatterbox."
+            "si existe."
         ),
+    )
+    parser.add_argument(
+        "--builtin",
+        action="store_true",
+        help="Ignora cualquier muestra y usa la voz original integrada de Chatterbox.",
     )
     parser.add_argument("--exaggeration", type=float, default=0.45)
     parser.add_argument("--cfg-weight", type=float, default=0.45)
     parser.add_argument("--temperature", type=float, default=0.8)
     args = parser.parse_args()
 
-    voice = Path(args.voice).expanduser().resolve() if args.voice else None
+    voice = None if args.builtin else (Path(args.voice).expanduser().resolve() if args.voice else None)
 
     audio_path, cache_hit, duration = NARRATOR.synthesize(
         args.text,
@@ -37,6 +42,7 @@ def main() -> None:
         cfg_weight=args.cfg_weight,
         temperature=args.temperature,
         audio_prompt_path=voice,
+        use_builtin_voice=args.builtin,
     )
 
     destination = Path(args.output).resolve()
@@ -45,7 +51,7 @@ def main() -> None:
 
     print()
     print("Prueba de narración terminada.")
-    print(f"Voz: {voice if voice else 'integrada de Chatterbox'}")
+    print(f"Voz: {'Chatterbox original' if args.builtin else (voice if voice else 'integrada de Chatterbox')}")
     print(f"Archivo: {destination}")
     print(f"Duración: {duration:.2f}s")
     print(f"Caché: {'sí' if cache_hit else 'no (primera generación)'}")
