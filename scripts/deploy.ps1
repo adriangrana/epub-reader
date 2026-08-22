@@ -141,9 +141,9 @@ function Ensure-TunnelProcess([string]$RunaraCommand) {
   & $RunaraCommand start $TunnelProcess *> $null
 }
 
-function Wait-ForHealth([string]$Url, [string]$FailureMessage) {
+function Wait-ForHealth([string]$Url, [string]$FailureMessage, [int]$Attempts = 30) {
   $healthy = $false
-  for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+  for ($attempt = 0; $attempt -lt $Attempts; $attempt += 1) {
     try {
       $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
       if ($response.StatusCode -eq 200) {
@@ -198,18 +198,19 @@ if (Test-Path (Join-Path $SourceRoot 'package-lock.json')) {
   Copy-Item -Path (Join-Path $SourceRoot 'package-lock.json') -Destination $DeployDir -Force
 }
 
-# Wrapper estable para Runara. El servicio ejecutado vive en C:\www\luma,
-# por lo que su cache queda en C:\www\luma\data\narration y se preserva entre deploys.
+# Precarga Chatterbox en la GPU antes de abrir el puerto HTTP. El healthcheck
+# de luma-tts solo respondera cuando el modelo este realmente listo, evitando
+# que toda la espera pesada recaiga sobre el primer Play del lector.
 $ttsRunner = Join-Path $DeployDir 'run-tts.cmd'
-$runnerContent = "@echo off`r`n`"$ttsPython`" tts\service.py`r`n"
+$runnerContent = "@echo off`r`n`"$ttsPython`" -c `"from tts.service import NARRATOR, main; NARRATOR._get_model(); main()`"`r`n"
 Set-Content -Path $ttsRunner -Value $runnerContent -Encoding ASCII
 
 Ensure-RunaraDaemon $runara
 Upsert-TtsProcess $runara
 Upsert-AppProcess $runara
 
-Write-Host 'Comprobando narrador IA local...'
-Wait-ForHealth "http://127.0.0.1:$TtsPort/health" "Luma TTS no respondio en http://127.0.0.1:$TtsPort/health. Revisa: runara logs $TtsProcess --err --lines 100"
+Write-Host 'Cargando narrador IA en la GPU (la primera vez puede tardar)...'
+Wait-ForHealth "http://127.0.0.1:$TtsPort/health" "Luma TTS no quedo listo en http://127.0.0.1:$TtsPort/health. Revisa: runara logs $TtsProcess --err --lines 100" 360
 
 Write-Host 'Comprobando healthcheck de Luma...'
 Wait-ForHealth "http://127.0.0.1:$Port/api/health" "Luma no respondio correctamente en http://127.0.0.1:$Port/api/health. Revisa: runara logs $AppProcess --err --lines 100"
@@ -219,7 +220,7 @@ Ensure-TunnelProcess $runara
 Write-Host ''
 Write-Host 'Deploy completado.' -ForegroundColor Green
 Write-Host "Local:    http://127.0.0.1:$Port"
-Write-Host "TTS:      http://127.0.0.1:$TtsPort (solo localhost)"
+Write-Host "TTS:      http://127.0.0.1:$TtsPort (solo localhost, modelo precargado)"
 Write-Host "Datos:    $(Join-Path $DeployDir 'data')"
 Write-Host "App:      runara info $AppProcess"
 Write-Host "Narrador: runara info $TtsProcess"
