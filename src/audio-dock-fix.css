@@ -38,13 +38,13 @@
 }
 
 .audio-dock > .text-button {
+  position: relative;
   width: 48px;
   height: 48px;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  display: grid;
-  place-items: center;
+  display: block;
   font-size: 0;
   line-height: 0;
   cursor: pointer;
@@ -54,12 +54,23 @@
   transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
 }
 
+/* Position the stop glyph independently from font metrics, pseudo-element
+   baseline behaviour and inherited button styles. This keeps the square
+   geometrically centred in Chrome/Edge on Windows. */
 .audio-dock > .text-button::before {
   content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
   width: 14px;
   height: 14px;
+  margin: 0;
   border-radius: 3px;
   background: currentColor;
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+  box-sizing: border-box;
+  pointer-events: none;
 }
 
 .audio-dock > .text-button:hover {
