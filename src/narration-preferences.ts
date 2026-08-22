@@ -1,3 +1,5 @@
+export {};
+
 const VOICE_STORAGE_KEY = 'luma:narration:voice:v1';
 const VOICE_SELECT_SELECTOR = '.audio-control:not(.speed) select';
 
