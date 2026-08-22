@@ -17,12 +17,16 @@ import perth
 import torch
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HOST = os.getenv("LUMA_TTS_HOST", "127.0.0.1")
 PORT = int(os.getenv("LUMA_TTS_PORT", "8790"))
-CACHE_DIR = Path(os.getenv("LUMA_TTS_CACHE_DIR", str(Path.cwd() / "data" / "narration"))).resolve()
+CACHE_DIR = Path(os.getenv("LUMA_TTS_CACHE_DIR", str(PROJECT_ROOT / "data" / "narration"))).resolve()
 MAX_TEXT_CHARS = int(os.getenv("LUMA_TTS_MAX_TEXT_CHARS", "700"))
 MODEL_VARIANT = os.getenv("LUMA_TTS_MODEL", "v3")
 LANGUAGE_ID = os.getenv("LUMA_TTS_LANGUAGE", "es")
+DEFAULT_VOICE_PATH = Path(
+    os.getenv("LUMA_TTS_VOICE", str(PROJECT_ROOT / "tts" / "voices" / "davefx.mp3"))
+).expanduser().resolve()
 
 DEFAULT_EXAGGERATION = 0.45
 DEFAULT_CFG_WEIGHT = 0.45
@@ -143,6 +147,8 @@ class Narrator:
             "perthVersion": PERTH_VERSION,
             "perthWatermarkerAvailable": _perth_watermarker_available(),
             "language": LANGUAGE_ID,
+            "defaultVoice": str(DEFAULT_VOICE_PATH),
+            "defaultVoiceAvailable": DEFAULT_VOICE_PATH.is_file(),
             "cudaAvailable": torch.cuda.is_available(),
             "torch": torch.__version__,
             "cudaRuntime": torch.version.cuda,
@@ -178,10 +184,6 @@ class Narrator:
                 )
                 self._resolved_model = MODEL_VARIANT
             else:
-                # Older PyPI builds expose only from_pretrained(device). They
-                # still provide the multilingual model, but do not allow V2/V3
-                # checkpoint selection. Use that build's default checkpoint
-                # instead of failing with an unexpected keyword argument.
                 print(
                     "[luma-tts] Esta versión no permite seleccionar t3_model; "
                     "cargando su checkpoint multilingüe predeterminado.",
@@ -190,9 +192,6 @@ class Narrator:
                 self._model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
                 self._resolved_model = "installed-default"
 
-            # Chatterbox replaces model.conds when a reference voice is used.
-            # Keep the built-in voice conditionals so a later request without
-            # --voice reliably returns to the model's original narrator.
             self._default_conditionals = self._model.conds
             self._loaded_at = time.time()
             elapsed = time.perf_counter() - started
@@ -220,12 +219,13 @@ class Narrator:
         exaggeration = _clamp(exaggeration, 0.25, 1.2, DEFAULT_EXAGGERATION)
         cfg_weight = _clamp(cfg_weight, 0.2, 1.0, DEFAULT_CFG_WEIGHT)
         temperature = _clamp(temperature, 0.1, 1.5, DEFAULT_TEMPERATURE)
-        voice_path = _resolve_voice_path(audio_prompt_path)
+
+        selected_voice = audio_prompt_path
+        if selected_voice is None and DEFAULT_VOICE_PATH.is_file():
+            selected_voice = DEFAULT_VOICE_PATH
+        voice_path = _resolve_voice_path(selected_voice)
         voice_hash = _file_sha256(voice_path) if voice_path else "builtin"
 
-        # Include package/model selection and the actual reference-audio bytes in
-        # the cache identity. Renaming a WAV does not duplicate cache entries,
-        # while changing its contents always produces fresh narration.
         identity = {
             "engine": "chatterbox",
             "chatterboxVersion": CHATTERBOX_VERSION,
@@ -335,7 +335,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(audio)
         except ValueError as exc:
             self._send_json(400, {"error": str(exc)})
-        except Exception as exc:  # keep service alive and expose a useful local error
+        except Exception as exc:
             print(f"[luma-tts] ERROR: {exc}", flush=True)
             self._send_json(500, {"error": str(exc)})
 
@@ -351,6 +351,11 @@ def main() -> None:
     print(
         f"[luma-tts] Perth: {PERTH_VERSION} · watermark: "
         f"{'sí' if _perth_watermarker_available() else 'no'} · setuptools: {SETUPTOOLS_VERSION}",
+        flush=True,
+    )
+    print(
+        f"[luma-tts] Voz predeterminada: "
+        f"{DEFAULT_VOICE_PATH if DEFAULT_VOICE_PATH.is_file() else 'integrada de Chatterbox'}",
         flush=True,
     )
     print(f"[luma-tts] CUDA: {torch.cuda.is_available()} · {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No disponible'}", flush=True)
