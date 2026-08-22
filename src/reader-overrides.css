@@ -108,6 +108,44 @@
   width: 118px;
 }
 
+/* While Chatterbox is loading the model or generating the next audio chunk,
+   the play button is disabled by ReaderView. Turn that disabled state into an
+   unmistakable spinner instead of leaving a static play/pause glyph that looks
+   frozen. */
+.play-button:disabled {
+  position: relative;
+  cursor: wait;
+  opacity: 1;
+}
+
+.play-button:disabled > svg {
+  visibility: hidden;
+}
+
+.play-button:disabled::after {
+  content: '';
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 3px solid rgba(255, 255, 255, .30);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: luma-narration-spin .78s linear infinite;
+}
+
+.audio-dock:has(.play-button:disabled) .audio-icon {
+  animation: luma-narration-pulse 1.35s ease-in-out infinite;
+}
+
+@keyframes luma-narration-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes luma-narration-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(140, 108, 255, .10); }
+  50% { box-shadow: 0 0 0 8px rgba(140, 108, 255, .04); }
+}
+
 .narration-choice-backdrop {
   position: fixed;
   inset: 0;
