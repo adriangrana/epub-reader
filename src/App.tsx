@@ -402,7 +402,6 @@ function App() {
           </div>
         </section>}
 
-        <div className="storage-card"><span>ALMACENAMIENTO LOCAL</span><strong>Los EPUB viven en este equipo.</strong><p>Las cuentas controlan el acceso; el archivo físico se conserva en el servidor Luma.</p></div>
         <div className="account-card"><div className="account-avatar">{user.name.slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><span>{user.email}</span></div><button onClick={handleLogout} title="Cerrar sesión"><LogOut /></button></div>
       </aside>
 
