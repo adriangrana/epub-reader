@@ -58,6 +58,69 @@
   .audio-dock {
     grid-template-columns: minmax(220px, 1fr) auto minmax(260px, 340px) 132px auto;
   }
+
+  /* While narration is running, keep Pause and Stop together before the
+     voice selector instead of leaving Stop isolated at the far right. */
+  .audio-dock:has(> .text-button) {
+    grid-template-columns: minmax(220px, 1fr) auto auto minmax(260px, 340px) 132px;
+    column-gap: 10px;
+  }
+
+  .audio-dock:has(> .text-button) > .audio-copy {
+    grid-column: 1;
+  }
+
+  .audio-dock:has(> .text-button) > .play-button {
+    grid-column: 2;
+  }
+
+  .audio-dock:has(> .text-button) > .text-button {
+    grid-column: 3;
+  }
+
+  .audio-dock:has(> .text-button) > .audio-control:not(.speed) {
+    grid-column: 4;
+    margin-left: 8px;
+  }
+
+  .audio-dock:has(> .text-button) > .audio-control.speed {
+    grid-column: 5;
+  }
+}
+
+/* Stop uses the same circular treatment as Play/Pause. The existing text stays
+   in the DOM for accessibility, while the visual control becomes a stop square. */
+.audio-dock > .text-button {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0;
+  line-height: 0;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(145deg, #7756f0, #9a69f5);
+  box-shadow: 0 8px 26px rgba(124, 88, 240, .3);
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+
+.audio-dock > .text-button::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.audio-dock > .text-button:hover {
+  color: #fff;
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  box-shadow: 0 10px 30px rgba(124, 88, 240, .38);
 }
 
 .audio-control {
