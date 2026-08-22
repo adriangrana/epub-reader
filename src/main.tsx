@@ -13,6 +13,7 @@ import './cover-polish.css';
 import './library-responsive.css';
 import './audio-dock-fix.css';
 import './account-password.css';
+import './sidebar-fixed.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
