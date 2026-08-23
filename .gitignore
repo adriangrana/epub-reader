@@ -5,5 +5,3 @@ data
 .env
 *.local
 .DS_Store
-.venv-tts
-__pycache__
