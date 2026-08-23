@@ -15,6 +15,7 @@ import './audio-dock-fix.css';
 import './account-password.css';
 import './sidebar-fixed.css';
 import './epub-replace-modal.css';
+import './cast-narration.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
