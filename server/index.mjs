@@ -420,6 +420,7 @@ const server = createServer(async (req, res) => {
       const bookId = decodeURIComponent(match[1]);
       if (!canEditAsset(user.id, bookId)) return sendError(res, 403, 'Solo quien subió originalmente el libro puede sustituir el EPUB.');
       const fileName = String(url.searchParams.get('fileName') || 'book.epub').trim();
+      const preserveProgress = url.searchParams.get('preserveProgress') !== '0';
       const data = await readBuffer(req, MAX_EPUB_BYTES);
       if (!data.length || data[0] !== 0x50 || data[1] !== 0x4b) return sendError(res, 400, 'El archivo no parece ser un EPUB válido.');
 
@@ -434,10 +435,24 @@ const server = createServer(async (req, res) => {
       db.prepare('UPDATE book_assets SET file_hash = ?, file_name = ?, file_path = ? WHERE id = ?')
         .run(fileHash, fileName || 'book.epub', storedFileName, bookId);
       if (asset.filePath !== storedFileName) safeUnlink(path.join(BOOKS_DIR, asset.filePath));
-      // Replacing the EPUB must not erase reader history. Keeping the existing
-      // progress also preserves the last known CFI when the new revision keeps
-      // compatible spine/content structure.
-      return sendJson(res, 200, { book: libraryBook(user.id, bookId) });
+
+      let affectedReaders = 0;
+      if (preserveProgress) {
+        // The old CFI belongs to the old EPUB revision and can become invalid.
+        // Keep percentage/history, but force clients to reconstruct an approximate
+        // position from the percentage in the new EPUB instead of risking a jump to 0%.
+        const result = db.prepare('UPDATE reading_progress SET cfi = NULL WHERE book_id = ?').run(bookId);
+        affectedReaders = Number(result.changes || 0);
+      } else {
+        const result = db.prepare('DELETE FROM reading_progress WHERE book_id = ?').run(bookId);
+        affectedReaders = Number(result.changes || 0);
+      }
+
+      return sendJson(res, 200, {
+        book: libraryBook(user.id, bookId),
+        progressPolicy: preserveProgress ? 'preserved' : 'reset',
+        affectedReaders,
+      });
     }
 
     if (match && req.method === 'GET') {
