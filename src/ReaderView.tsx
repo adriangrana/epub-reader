@@ -64,6 +64,17 @@ function currentCfi(rendition: Rendition | null): string {
   return pageLocation(rendition).start?.cfi ?? '';
 }
 
+function approximateCfiFromProgress(book: Book, percentage: number): string {
+  const safePercentage = Math.max(0, Math.min(.999999, Number(percentage || 0)));
+  if (safePercentage <= 0) return '';
+  try {
+    const locations = book.locations as unknown as { cfiFromPercentage?: (value: number) => string };
+    return locations.cfiFromPercentage?.(safePercentage) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 function installSwipeGestures(document: Document, onTurnPage: (direction: PageDirection) => void) {
   const root = document.documentElement;
   if (!root || root.dataset.lumaSwipe === 'true') return;
@@ -362,9 +373,20 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
           updateProgress(record.id, cfi, percentage).catch(() => setError('No se pudo guardar el progreso de lectura.'));
         });
 
-        await rendition.display(record.cfi || undefined);
+        const percentageFallback = approximateCfiFromProgress(book, record.progress ?? 0);
+        let initialTarget = record.cfi || percentageFallback || undefined;
+        try {
+          await rendition.display(initialTarget);
+        } catch (displayError) {
+          // A CFI saved against an older EPUB revision may no longer exist.
+          // Fall back to the saved percentage instead of opening at the beginning
+          // and accidentally overwriting the reader's progress with 0%.
+          if (!percentageFallback || percentageFallback === initialTarget) throw displayError;
+          initialTarget = percentageFallback;
+          await rendition.display(initialTarget);
+        }
         await waitForPagePaint();
-        const initialCfi = currentCfi(rendition) || record.cfi || '';
+        const initialCfi = currentCfi(rendition) || initialTarget || '';
         currentPageCfiRef.current = initialCfi;
         if (initialCfi) {
           try {
