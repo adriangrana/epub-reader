@@ -1,13 +1,14 @@
 import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft, BookOpen, Check, Download, FilePenLine, FileText, Globe2, LoaderCircle,
-  LockKeyhole, Pencil, Plus, RefreshCw, Save, Share2, Trash2, UserPlus, X,
+  AlertTriangle, ArrowLeft, BookOpen, Check, Download, FilePenLine, FileText, Globe2,
+  LoaderCircle, LockKeyhole, Pencil, Plus, RefreshCw, RotateCcw, Save, Share2,
+  ShieldCheck, Trash2, UserPlus, X,
 } from 'lucide-react';
 import {
-  coverUrl, downloadUrl, LibraryBook, replaceBookEpub, updateBookCover,
-  updateBookMetadata, updateProgress,
+  coverUrl, downloadUrl, LibraryBook, updateBookCover, updateBookMetadata, updateProgress,
 } from './api';
 import { readEpubMetadata } from './epubMetadata';
+import { replaceEpubWithProgressPolicy } from './replaceEpub';
 import MarkdownText from './MarkdownText';
 
 export type BookContext = 'library' | 'public' | 'shared';
@@ -63,6 +64,8 @@ export default function BookDetailView({
   const [busyAction, setBusyAction] = useState<'metadata' | 'epub' | 'restart' | null>(null);
   const [localError, setLocalError] = useState('');
   const [localNotice, setLocalNotice] = useState('');
+  const [pendingEpub, setPendingEpub] = useState<File | null>(null);
+  const [preserveProgress, setPreserveProgress] = useState(true);
   const epubInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -71,6 +74,8 @@ export default function BookDetailView({
     setAuthorDraft(book.author);
     setDescriptionDraft(book.description ?? '');
     setEditingMetadata(false);
+    setPendingEpub(null);
+    setPreserveProgress(true);
     setLocalError('');
     setLocalNotice('');
   }, [book]);
@@ -140,7 +145,7 @@ export default function BookDetailView({
     }
   };
 
-  const updateEpub = async (event: ChangeEvent<HTMLInputElement>) => {
+  const updateEpub = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
@@ -149,23 +154,31 @@ export default function BookDetailView({
       return;
     }
 
-    const confirmed = window.confirm(
-      '¿Quieres sustituir el EPUB actual? Se conservarán el libro, su visibilidad y sus comparticiones, pero se reiniciará el progreso de lectura de todos los usuarios que lo estén leyendo porque las posiciones internas del EPUB pueden cambiar.',
-    );
-    if (!confirmed) return;
+    setLocalError('');
+    setLocalNotice('');
+    setPreserveProgress(true);
+    setPendingEpub(file);
+  };
+
+  const confirmEpubUpdate = async () => {
+    const file = pendingEpub;
+    if (!file) return;
 
     setBusyAction('epub');
     setLocalError('');
     setLocalNotice('');
     try {
       const metadata = await readEpubMetadata(file);
-      const updated = await replaceBookEpub(currentBook.id, file);
+      const updated = await replaceEpubWithProgressPolicy(currentBook.id, file, preserveProgress);
       if (metadata.cover) {
         await updateBookCover(currentBook.id, metadata.cover);
         updated.hasCover = true;
       }
       replaceLocalBook(updated);
-      setLocalNotice('EPUB actualizado. El progreso de lectura se reinició porque el contenido interno pudo cambiar.');
+      setPendingEpub(null);
+      setLocalNotice(preserveProgress
+        ? 'EPUB actualizado. Se conservaron los porcentajes de lectura y Luma reconstruirá una posición aproximada en la nueva versión.'
+        : 'EPUB actualizado. Se reinició el progreso de lectura de todos los lectores.');
     } catch (cause) {
       setLocalError(cause instanceof Error ? cause.message : 'No se pudo actualizar el EPUB.');
     } finally {
@@ -342,6 +355,46 @@ export default function BookDetailView({
           )}
         </div>
       </div>
+
+      {pendingEpub && <div className="modal-backdrop epub-replace-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && busyAction !== 'epub') setPendingEpub(null); }}>
+        <section className="epub-replace-modal" role="dialog" aria-modal="true" aria-labelledby="epub-replace-title">
+          <button type="button" className="modal-close" onClick={() => setPendingEpub(null)} disabled={busyAction === 'epub'} aria-label="Cerrar"><X /></button>
+          <span className="epub-replace-icon"><RefreshCw /></span>
+          <span className="eyebrow">NUEVA VERSIÓN DEL EPUB</span>
+          <h2 id="epub-replace-title">Actualizar «{currentBook.title}»</h2>
+          <p className="epub-replace-intro">El libro, su visibilidad y sus comparticiones se conservarán. Decide qué debe ocurrir con el progreso de quienes ya lo están leyendo.</p>
+
+          <div className="epub-file-chip"><FileText /><span>{pendingEpub.name}</span></div>
+
+          <div className="epub-progress-options">
+            <label className={`epub-progress-option ${preserveProgress ? 'selected' : ''}`}>
+              <input type="radio" name="progress-policy" checked={preserveProgress} onChange={() => setPreserveProgress(true)} disabled={busyAction === 'epub'} />
+              <span className="epub-option-icon safe"><ShieldCheck /></span>
+              <span className="epub-option-copy">
+                <strong>Mantener progreso de lectura</strong>
+                <small>Conserva el porcentaje de cada lector. Luma descarta las posiciones internas antiguas y reconstruye una posición aproximada en el EPUB nuevo.</small>
+                <em><AlertTriangle /> Si el contenido cambió mucho, el mismo porcentaje puede corresponder a otra parte del texto. Úsalo bajo tu responsabilidad.</em>
+              </span>
+            </label>
+
+            <label className={`epub-progress-option ${!preserveProgress ? 'selected danger' : ''}`}>
+              <input type="radio" name="progress-policy" checked={!preserveProgress} onChange={() => setPreserveProgress(false)} disabled={busyAction === 'epub'} />
+              <span className="epub-option-icon reset"><RotateCcw /></span>
+              <span className="epub-option-copy">
+                <strong>Reiniciar progreso de todos</strong>
+                <small>Todos los lectores volverán al 0 %. Esta opción es más segura si cambiaste capítulos, orden o estructura de forma importante.</small>
+              </span>
+            </label>
+          </div>
+
+          <div className="epub-replace-actions">
+            <button type="button" className="epub-cancel-button" onClick={() => setPendingEpub(null)} disabled={busyAction === 'epub'}>Cancelar</button>
+            <button type="button" className="primary-button" onClick={() => void confirmEpubUpdate()} disabled={busyAction === 'epub'}>
+              {busyAction === 'epub' ? <LoaderCircle className="spin" /> : <RefreshCw />} Actualizar EPUB
+            </button>
+          </div>
+        </section>
+      </div>}
     </section>
   );
 }
