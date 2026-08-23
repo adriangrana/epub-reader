@@ -1,0 +1,305 @@
+.cast-settings-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid rgba(140, 108, 255, .18);
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #9e94c9;
+  background: rgba(140, 108, 255, .045);
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+  transition: border-color .16s ease, color .16s ease, background .16s ease;
+}
+
+.cast-settings-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cast-settings-button:hover,
+.cast-settings-button.active {
+  color: #e6e1ff;
+  border-color: rgba(140, 108, 255, .42);
+  background: rgba(140, 108, 255, .12);
+}
+
+.cast-settings-button:disabled {
+  opacity: .45;
+  cursor: wait;
+}
+
+.cast-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  padding: 24px;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 6, 13, .78);
+  backdrop-filter: blur(9px);
+}
+
+.cast-modal {
+  position: relative;
+  width: min(760px, 100%);
+  max-height: min(850px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 32px;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 24px;
+  color: #e9ecf8;
+  background:
+    radial-gradient(circle at 92% 2%, rgba(140, 108, 255, .14), transparent 30%),
+    linear-gradient(155deg, #151b2e, #0b101e 72%);
+  box-shadow: 0 34px 110px rgba(0, 0, 0, .6);
+}
+
+.cast-modal-icon {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 18px;
+  border-radius: 15px;
+  display: grid;
+  place-items: center;
+  color: #c5baff;
+  background: rgba(140, 108, 255, .14);
+}
+
+.cast-modal-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.cast-modal h2 {
+  margin: 8px 0 9px;
+  font-family: 'Playfair Display', serif;
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.cast-modal > p {
+  max-width: 650px;
+  margin: 0;
+  color: #8791a9;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.cast-mode-switch {
+  margin-top: 24px;
+  padding: 4px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .04);
+}
+
+.cast-mode-switch button {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  color: #7f89a2;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cast-mode-switch button.active {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(115, 86, 239, .78), rgba(152, 105, 246, .72));
+  box-shadow: 0 7px 20px rgba(74, 50, 161, .24);
+}
+
+.cast-scanning {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #aeb6cc;
+  text-align: center;
+}
+
+.cast-scanning svg {
+  width: 28px;
+  height: 28px;
+  color: #9d86ff;
+}
+
+.cast-scanning strong {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.cast-scanning span {
+  color: #68738d;
+  font-size: 10px;
+}
+
+.cast-role-list {
+  margin-top: 18px;
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+.cast-role-row {
+  min-width: 0;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: minmax(150px, .8fr) minmax(240px, 1.4fr);
+  align-items: center;
+  gap: 18px;
+  background: rgba(255, 255, 255, .018);
+}
+
+.cast-role-row + .cast-role-row {
+  border-top: 1px solid rgba(255, 255, 255, .055);
+}
+
+.cast-role-name,
+.cast-role-name strong,
+.cast-role-name small {
+  min-width: 0;
+  display: block;
+}
+
+.cast-role-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dfe3ef;
+  font-size: 11px;
+}
+
+.cast-role-name small {
+  margin-top: 3px;
+  color: #68738d;
+  font-size: 8px;
+}
+
+.cast-role-row select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 34px 0 11px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 10px;
+  outline: 0;
+  color: #d7dbea;
+  background: #0b1120;
+  font-size: 10px;
+}
+
+.cast-role-row select:focus {
+  border-color: rgba(140, 108, 255, .55);
+  box-shadow: 0 0 0 3px rgba(140, 108, 255, .08);
+}
+
+.cast-modal-note {
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid rgba(101, 217, 233, .08);
+  border-radius: 11px;
+  color: #727e98;
+  background: rgba(101, 217, 233, .025);
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.cast-modal-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 9px;
+}
+
+.cast-rescan-button {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, .075);
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #9ca6bc;
+  background: rgba(255, 255, 255, .025);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.cast-rescan-button:hover {
+  color: #fff;
+  border-color: rgba(140, 108, 255, .26);
+  background: rgba(140, 108, 255, .07);
+}
+
+.cast-rescan-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (max-width: 900px) {
+  .audio-copy > div {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .cast-settings-button {
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .cast-settings-button span {
+    display: none;
+  }
+
+  .cast-modal-backdrop {
+    padding: 14px;
+  }
+
+  .cast-modal {
+    max-height: calc(100dvh - 28px);
+    padding: 25px 18px 20px;
+    border-radius: 20px;
+  }
+
+  .cast-modal h2 {
+    padding-right: 32px;
+    font-size: 25px;
+  }
+
+  .cast-role-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .cast-modal-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .cast-modal-actions > button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .cast-mode-switch {
+    grid-template-columns: 1fr;
+  }
+}
