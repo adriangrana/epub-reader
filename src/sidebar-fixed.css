@@ -1,0 +1,73 @@
+/* Keep the library navigation anchored to the viewport while only the catalog
+   scrolls. The account controls stay permanently available at the bottom. */
+
+.sidebar .account-card {
+  margin-top: auto;
+  flex: 0 0 auto;
+}
+
+.sidebar .reading-now {
+  min-height: 0;
+}
+
+@media (min-width: 901px) {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+  }
+
+  .app-shell {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    flex: 0 0 auto;
+  }
+
+  .sidebar .reading-now-list {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(140, 108, 255, .3) transparent;
+  }
+
+  .library {
+    height: 100dvh;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
+/* The mobile drawer is already fixed to the viewport. Keep the drawer itself
+   static too, with the account card pinned to its bottom edge. */
+@media (max-width: 900px) {
+  .sidebar {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar .reading-now-list {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .sidebar .account-card {
+    margin-top: auto;
+  }
+}
