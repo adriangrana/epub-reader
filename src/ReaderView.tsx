@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ePub, { Book, Rendition } from 'epubjs';
 import {
   ArrowLeft, BookOpenCheck, ChevronLeft, ChevronRight, CirclePause, CirclePlay, Headphones,
-  LoaderCircle, MapPin, Menu, Sparkles, X,
+  LoaderCircle, MapPin, Menu, Sparkles, UsersRound, X,
 } from 'lucide-react';
 import { fetchBookData, getCurrentUser, LibraryBook, updateProgress } from './api';
+import {
+  CastRole, CastSpeechSegment, detectCastRolesFromBook, detectCastRolesFromText,
+  FALLBACK_ROLE_1, FALLBACK_ROLE_2, NARRATOR_ROLE, splitCastSpeechSegments,
+} from './castNarration';
 import { SpeechSegment, splitSpeechSegments } from './speech';
 
 type TocItem = { label?: string; href: string; subitems?: TocItem[] };
@@ -13,6 +17,8 @@ type SpeechToken = { start: number; end: number; range: Range; document: Documen
 type SpeechPage = { text: string; tokens: SpeechToken[] };
 type PageLocation = { start?: { cfi?: string; href?: string }; end?: { cfi?: string; href?: string } };
 type PageDirection = 'prev' | 'next';
+type ReaderSpeechSegment = SpeechSegment | CastSpeechSegment;
+type StoredCastConfig = { enabled: boolean; roles: CastRole[]; voices: Record<string, string> };
 
 type Props = {
   record: LibraryBook;
@@ -75,6 +81,68 @@ function approximateCfiFromProgress(book: Book, percentage: number): string {
   }
 }
 
+function mergeCastRoles(...groups: CastRole[][]) {
+  const merged = new Map<string, CastRole>();
+  const add = (role: CastRole) => {
+    const current = merged.get(role.id);
+    if (!current) merged.set(role.id, role);
+    else merged.set(role.id, { ...current, mentions: Math.max(current.mentions, role.mentions), detected: current.detected || role.detected });
+  };
+
+  add({ id: NARRATOR_ROLE, label: NARRATOR_ROLE, mentions: 0, detected: true });
+  for (const roles of groups) for (const role of roles) add(role);
+  add({ id: FALLBACK_ROLE_1, label: FALLBACK_ROLE_1, mentions: 0, detected: false });
+  add({ id: FALLBACK_ROLE_2, label: FALLBACK_ROLE_2, mentions: 0, detected: false });
+
+  const fixed = new Set([NARRATOR_ROLE, FALLBACK_ROLE_1, FALLBACK_ROLE_2]);
+  const detected = [...merged.values()]
+    .filter((role) => !fixed.has(role.id))
+    .sort((a, b) => b.mentions - a.mentions || a.label.localeCompare(b.label, 'es'));
+  return [
+    merged.get(NARRATOR_ROLE)!,
+    ...detected,
+    merged.get(FALLBACK_ROLE_1)!,
+    merged.get(FALLBACK_ROLE_2)!,
+  ];
+}
+
+function defaultCastVoiceMap(
+  roles: CastRole[],
+  availableVoices: SpeechSynthesisVoice[],
+  narratorVoice: string,
+  existing: Record<string, string> = {},
+) {
+  const spanish = availableVoices.filter((voice) => voice.lang.toLowerCase().startsWith('es'));
+  const pool = spanish.length ? spanish : availableVoices;
+  const availableNames = new Set(availableVoices.map((voice) => voice.name));
+  const next: Record<string, string> = {};
+  const narrator = availableNames.has(existing[NARRATOR_ROLE])
+    ? existing[NARRATOR_ROLE]
+    : availableNames.has(narratorVoice) ? narratorVoice : pool[0]?.name ?? '';
+  next[NARRATOR_ROLE] = narrator;
+
+  let cursor = 0;
+  for (const role of roles) {
+    if (role.id === NARRATOR_ROLE) continue;
+    if (availableNames.has(existing[role.id])) {
+      next[role.id] = existing[role.id];
+      continue;
+    }
+    if (!pool.length) {
+      next[role.id] = narrator;
+      continue;
+    }
+    let candidate = pool[cursor % pool.length];
+    if (pool.length > 1 && candidate.name === narrator) {
+      cursor += 1;
+      candidate = pool[cursor % pool.length];
+    }
+    next[role.id] = candidate.name;
+    cursor += 1;
+  }
+  return next;
+}
+
 function installSwipeGestures(document: Document, onTurnPage: (direction: PageDirection) => void) {
   const root = document.documentElement;
   if (!root || root.dataset.lumaSwipe === 'true') return;
@@ -111,8 +179,6 @@ function installSwipeGestures(document: Document, onTurnPage: (direction: PageDi
     const horizontalDistance = Math.abs(deltaX);
     const verticalDistance = Math.abs(deltaY);
 
-    // Require a deliberate, mostly-horizontal swipe. This leaves normal taps,
-    // text selection and vertical gestures alone.
     if (elapsed > 900 || horizontalDistance < 55 || horizontalDistance < verticalDistance * 1.25) return;
     onTurnPage(deltaX < 0 ? 'next' : 'prev');
   }, { passive: true });
@@ -132,11 +198,13 @@ function visibleSpeechPage(rendition: Rendition): SpeechPage {
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
+    let lastBlock: Element | null = null;
 
     while (node) {
       const parent = node.parentElement;
       if (parent && !parent.closest('script, style, noscript')) {
         const source = node.data;
+        const block = parent.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6, div') ?? parent;
         for (const match of source.matchAll(/\S+/g)) {
           const localStart = match.index ?? 0;
           const localEnd = localStart + match[0].length;
@@ -157,10 +225,11 @@ function visibleSpeechPage(rendition: Rendition): SpeechPage {
             }
           }
 
-          if (text) text += ' ';
+          if (text) text += block !== lastBlock ? '\n' : ' ';
           const start = text.length;
           text += match[0];
           tokens.push({ start, end: text.length, range, document });
+          lastBlock = block;
         }
       }
       node = walker.nextNode() as Text | null;
@@ -228,11 +297,12 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const renditionRef = useRef<Rendition | null>(null);
   const currentPageCfiRef = useRef('');
   const speechPageRef = useRef<SpeechPage | null>(null);
-  const speechSegmentsRef = useRef<SpeechSegment[]>([]);
+  const speechSegmentsRef = useRef<ReaderSpeechSegment[]>([]);
   const speechSegmentIndexRef = useRef(0);
   const speechOffsetRef = useRef(0);
   const speechRunRef = useRef(0);
   const checkpointKeyRef = useRef<string | null>(null);
+  const castStorageKeyRef = useRef<string | null>(null);
   const lastCheckpointWriteRef = useRef(0);
   const autoAdvanceRef = useRef<(runId: number) => Promise<void>>(async () => undefined);
   const startPageRef = useRef<(offset: number, runId?: number) => Promise<void>>(async () => undefined);
@@ -251,6 +321,12 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
   const [narrationPreparing, setNarrationPreparing] = useState(false);
   const [savedCheckpoint, setSavedCheckpoint] = useState<NarrationCheckpoint | null>(null);
   const [resumePromptOpen, setResumePromptOpen] = useState(false);
+  const [castModalOpen, setCastModalOpen] = useState(false);
+  const [castScanning, setCastScanning] = useState(false);
+  const [castEnabled, setCastEnabled] = useState(false);
+  const [castRoles, setCastRoles] = useState<CastRole[]>([]);
+  const [castVoices, setCastVoices] = useState<Record<string, string>>({});
+  const [activeSpeaker, setActiveSpeaker] = useState('');
   const [error, setError] = useState('');
 
   const persistCheckpoint = useCallback((cfi: string, offset: number, force = false) => {
@@ -277,22 +353,39 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     setSpeaking(false);
     setPaused(false);
     setNarrationPreparing(false);
+    setActiveSpeaker('');
   }, [persistCheckpoint]);
 
   useEffect(() => {
     let active = true;
+    setCastRoles([]);
+    setCastVoices({});
+    setCastEnabled(false);
     getCurrentUser().then((user) => {
       if (!active || !user) return;
       const key = `luma:narration:v2:${user.id}:${record.id}`;
       checkpointKeyRef.current = key;
       try {
         const raw = localStorage.getItem(key);
-        if (!raw) return;
-        const parsed = JSON.parse(raw) as Partial<NarrationCheckpoint>;
-        if (typeof parsed.cfi === 'string' && parsed.cfi && Number.isFinite(parsed.offset)) {
-          setSavedCheckpoint({ cfi: parsed.cfi, offset: Math.max(0, Number(parsed.offset)), updatedAt: Number(parsed.updatedAt || 0) });
+        if (raw) {
+          const parsed = JSON.parse(raw) as Partial<NarrationCheckpoint>;
+          if (typeof parsed.cfi === 'string' && parsed.cfi && Number.isFinite(parsed.offset)) {
+            setSavedCheckpoint({ cfi: parsed.cfi, offset: Math.max(0, Number(parsed.offset)), updatedAt: Number(parsed.updatedAt || 0) });
+          }
         }
       } catch { /* ignore malformed local checkpoint */ }
+
+      const castKey = `luma:cast:v1:${user.id}:${record.id}`;
+      castStorageKeyRef.current = castKey;
+      try {
+        const rawCast = localStorage.getItem(castKey);
+        if (rawCast) {
+          const parsed = JSON.parse(rawCast) as Partial<StoredCastConfig>;
+          if (Array.isArray(parsed.roles)) setCastRoles(parsed.roles);
+          if (parsed.voices && typeof parsed.voices === 'object') setCastVoices(parsed.voices);
+          setCastEnabled(Boolean(parsed.enabled));
+        }
+      } catch { /* ignore malformed cast configuration */ }
     }).catch(() => undefined);
     return () => { active = false; };
   }, [record.id]);
@@ -378,9 +471,6 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
         try {
           await rendition.display(initialTarget);
         } catch (displayError) {
-          // A CFI saved against an older EPUB revision may no longer exist.
-          // Fall back to the saved percentage instead of opening at the beginning
-          // and accidentally overwriting the reader's progress with 0%.
           if (!percentageFallback || percentageFallback === initialTarget) throw displayError;
           initialTarget = percentageFallback;
           await rendition.display(initialTarget);
@@ -423,6 +513,41 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     return () => cancelAnimationFrame(frame);
   }, [activeTocHref, tocOpen]);
 
+  const scanCast = useCallback(async () => {
+    const book = bookRef.current;
+    const rendition = renditionRef.current;
+    setCastScanning(true);
+    try {
+      const bookRoles = book ? await detectCastRolesFromBook(book) : [];
+      const pageRoles = rendition ? detectCastRolesFromText(visibleSpeechPage(rendition).text) : [];
+      const roles = mergeCastRoles(bookRoles, pageRoles);
+      setCastRoles(roles);
+      setCastVoices((current) => defaultCastVoiceMap(roles, voices, voiceName, current));
+    } catch {
+      const roles = mergeCastRoles([]);
+      setCastRoles(roles);
+      setCastVoices((current) => defaultCastVoiceMap(roles, voices, voiceName, current));
+    } finally {
+      setCastScanning(false);
+    }
+  }, [voiceName, voices]);
+
+  const openCastSettings = useCallback(async () => {
+    stopSpeech(true);
+    setCastModalOpen(true);
+    if (!castRoles.length) await scanCast();
+    else setCastVoices((current) => defaultCastVoiceMap(castRoles, voices, voiceName, current));
+  }, [castRoles, scanCast, stopSpeech, voiceName, voices]);
+
+  const saveCastSettings = () => {
+    const key = castStorageKeyRef.current;
+    if (key) {
+      const config: StoredCastConfig = { enabled: castEnabled, roles: castRoles, voices: castVoices };
+      try { localStorage.setItem(key, JSON.stringify(config)); } catch { /* storage may be unavailable */ }
+    }
+    setCastModalOpen(false);
+  };
+
   const speakSegment = useCallback((index: number, runId: number) => {
     if (runId !== speechRunRef.current) return;
     const segment = speechSegmentsRef.current[index];
@@ -434,9 +559,12 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
     speechSegmentIndexRef.current = index;
     const utterance = new SpeechSynthesisUtterance(segment.text);
-    const selectedVoice = voices.find((voice) => voice.name === voiceName);
+    const speaker = 'speaker' in segment ? segment.speaker : NARRATOR_ROLE;
+    const selectedVoiceName = castEnabled ? (castVoices[speaker] || castVoices[NARRATOR_ROLE] || voiceName) : voiceName;
+    const selectedVoice = voices.find((voice) => voice.name === selectedVoiceName);
     if (selectedVoice) utterance.voice = selectedVoice;
     utterance.rate = rate;
+    setActiveSpeaker(castEnabled ? speaker : '');
 
     speechOffsetRef.current = segment.start;
     highlightSpeechOffset(page, segment.start);
@@ -469,11 +597,12 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
       setSpeaking(false);
       setPaused(false);
       setNarrationPreparing(false);
+      setActiveSpeaker('');
       setError('La voz del navegador interrumpió la narración.');
     };
 
     window.speechSynthesis.speak(utterance);
-  }, [persistCheckpoint, rate, voiceName, voices]);
+  }, [castEnabled, castVoices, persistCheckpoint, rate, voiceName, voices]);
 
   const startCurrentPageNarration = useCallback(async (offset: number, existingRunId?: number) => {
     const rendition = renditionRef.current;
@@ -503,7 +632,9 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
     const safeOffset = Math.max(0, Math.min(page.text.length, offset));
     speechOffsetRef.current = safeOffset;
-    const segments = splitSpeechSegments(page.text, safeOffset);
+    const segments: ReaderSpeechSegment[] = castEnabled
+      ? splitCastSpeechSegments(page.text, castRoles, safeOffset)
+      : splitSpeechSegments(page.text, safeOffset);
     speechSegmentsRef.current = segments;
     speechSegmentIndexRef.current = 0;
 
@@ -518,7 +649,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
     setPaused(false);
     setNarrationPreparing(false);
     speakSegment(0, runId);
-  }, [persistCheckpoint, speakSegment]);
+  }, [castEnabled, castRoles, persistCheckpoint, speakSegment]);
 
   useEffect(() => { startPageRef.current = startCurrentPageNarration; }, [startCurrentPageNarration]);
 
@@ -541,6 +672,7 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
       setSpeaking(false);
       setPaused(false);
       setNarrationPreparing(false);
+      setActiveSpeaker('');
       return;
     }
 
@@ -614,6 +746,11 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
 
   const flatToc = flattenToc(toc);
   const progressPercent = Math.round(progress * 100);
+  const narrationState = narrationPreparing
+    ? 'Preparando narración…'
+    : speaking
+      ? `${castEnabled && activeSpeaker ? `${activeSpeaker} · ` : ''}${paused ? 'En pausa' : 'Leyendo y siguiendo el texto'}`
+      : 'Escuchar el libro';
 
   return (
     <main className="reader-shell">
@@ -663,7 +800,17 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
       </div>
 
       <footer className="audio-dock">
-        <div className="audio-copy"><span className="audio-icon"><Headphones /></span><div><small>NARRACIÓN CONTINUA</small><strong>{narrationPreparing ? 'Preparando narración…' : speaking ? (paused ? 'En pausa' : 'Leyendo y siguiendo el texto') : 'Escuchar el libro'}</strong></div></div>
+        <div className="audio-copy">
+          <span className="audio-icon"><Headphones /></span>
+          <div><small>{castEnabled ? 'NARRACIÓN CON REPARTO' : 'NARRACIÓN CONTINUA'}</small><strong>{narrationState}</strong></div>
+          <button
+            type="button"
+            className={`cast-settings-button ${castEnabled ? 'active' : ''}`}
+            onClick={() => { void openCastSettings(); }}
+            disabled={loading || narrationPreparing}
+            title="Configurar reparto de voces"
+          ><UsersRound /><span>Reparto</span></button>
+        </div>
         <button className="play-button" onClick={requestPlay} disabled={loading || narrationPreparing} aria-label={paused || !speaking ? 'Reproducir' : 'Pausar'}>{speaking && !paused ? <CirclePause /> : <CirclePlay />}</button>
         <label className="audio-control">Voz<select value={voiceName} onChange={(event) => { stopSpeech(true); setVoiceName(event.target.value); }}>{voices.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} · {voice.lang}</option>)}</select></label>
         <label className="audio-control speed">Velocidad<select value={rate} onChange={(event) => { stopSpeech(true); setRate(Number(event.target.value)); }}><option value={0.8}>0.8×</option><option value={1}>1×</option><option value={1.15}>1.15×</option><option value={1.3}>1.3×</option><option value={1.5}>1.5×</option><option value={1.75}>1.75×</option></select></label>
@@ -685,6 +832,37 @@ export default function ReaderView({ record, onClose, onProgress }: Props) {
               <BookOpenCheck /><span><strong>Empezar esta página</strong><small>Lee desde la página visible actual.</small></span>
             </button>
           </div>
+        </section>
+      </div>}
+
+      {castModalOpen && <div className="cast-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !castScanning) setCastModalOpen(false); }}>
+        <section className="cast-modal" role="dialog" aria-modal="true" aria-labelledby="cast-modal-title">
+          <button className="modal-close" onClick={() => setCastModalOpen(false)} aria-label="Cerrar" disabled={castScanning}><X /></button>
+          <span className="cast-modal-icon"><UsersRound /></span>
+          <span className="eyebrow">NARRACIÓN CON REPARTO</span>
+          <h2 id="cast-modal-title">Asigna una voz a cada participante</h2>
+          <p>Luma busca atribuciones como “dijo Kael” o “Vale respondió” en el EPUB. Los diálogos sin atribución se infieren por contexto y, cuando no hay suficiente información, usan Personaje 1 y Personaje 2.</p>
+
+          <div className="cast-mode-switch" role="group" aria-label="Modo de narración">
+            <button type="button" className={!castEnabled ? 'active' : ''} onClick={() => setCastEnabled(false)}>Una sola voz</button>
+            <button type="button" className={castEnabled ? 'active' : ''} onClick={() => setCastEnabled(true)}>Reparto de voces</button>
+          </div>
+
+          {castScanning ? <div className="cast-scanning"><LoaderCircle className="spin" /><strong>Analizando personajes del libro…</strong><span>Esto se hace localmente en el navegador.</span></div> : <>
+            <div className="cast-role-list">
+              {castRoles.map((role) => <label className="cast-role-row" key={role.id}>
+                <span className="cast-role-name"><strong>{role.label}</strong><small>{role.id === NARRATOR_ROLE ? 'Narración' : role.detected ? `${role.mentions} atribuciones detectadas` : 'Diálogo sin identificar'}</small></span>
+                <select value={castVoices[role.id] || voiceName} onChange={(event) => setCastVoices((current) => ({ ...current, [role.id]: event.target.value }))}>
+                  {voices.map((voice) => <option key={`${role.id}-${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} · {voice.lang}</option>)}
+                </select>
+              </label>)}
+            </div>
+            <div className="cast-modal-note">La detección es heurística: puedes oír algún diálogo con una voz incorrecta cuando el texto no indica quién habla. El reparto guardado es específico de este usuario, libro y navegador.</div>
+            <div className="cast-modal-actions">
+              <button type="button" className="cast-rescan-button" onClick={() => { void scanCast(); }}><UsersRound /> Volver a detectar</button>
+              <button type="button" className="primary-button" onClick={saveCastSettings}>Guardar reparto</button>
+            </div>
+          </>}
         </section>
       </div>}
 
