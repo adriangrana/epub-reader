@@ -182,7 +182,14 @@ export async function updateProgress(bookId: string, cfi: string, percentage: nu
 }
 
 export async function fetchBookData(bookId: string): Promise<ArrayBuffer> {
-  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/file`, { credentials: 'include' });
+  // The book id stays stable when an EPUB is replaced, so the bare file URL can
+  // otherwise resolve to a cached copy from the previous revision. Use a unique
+  // request URL and explicitly bypass the browser cache on every reader open.
+  const version = Date.now().toString(36);
+  const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/file?v=${version}`, {
+    credentials: 'include',
+    cache: 'no-store',
+  });
   if (!response.ok) {
     let message = 'No se pudo descargar el EPUB.';
     try { message = (await response.json() as ApiErrorBody).error || message; } catch { /* keep fallback */ }
