@@ -4,19 +4,25 @@ import process from 'node:process';
 import { DatabaseSync } from 'node:sqlite';
 
 function usage(exitCode = 0) {
-  console.log(`Uso:\n  node scripts/book-readers.mjs [titulo] [--db <ruta>]\n\nSin título muestra todos los libros y sus lectores.\n\nEjemplos:\n  node scripts/book-readers.mjs\n  node scripts/book-readers.mjs "El Archivo de los Olvidados"\n  node scripts/book-readers.mjs "Archivo" --db "C:/www/luma/data/luma.sqlite"`);
+  console.log(`Uso:\n  node scripts/book-readers.mjs [titulo] [--id <bookId>] [--db <ruta>]\n\nSin título muestra todos los libros y sus lectores.\n\nEjemplos:\n  node scripts/book-readers.mjs\n  node scripts/book-readers.mjs "El Archivo de los Olvidados"\n  node scripts/book-readers.mjs --id "<book-id>"\n  node scripts/book-readers.mjs "Archivo" --db "C:/www/luma/data/luma.sqlite"`);
   process.exit(exitCode);
 }
 
 function parseArgs(argv) {
   const positional = [];
   let dbPath = process.env.LUMA_REPORT_DB || '';
+  let bookId = '';
 
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--help' || value === '-h') usage(0);
     if (value === '--db') {
       dbPath = argv[index + 1] || '';
+      index += 1;
+      continue;
+    }
+    if (value === '--id') {
+      bookId = argv[index + 1] || '';
       index += 1;
       continue;
     }
@@ -29,7 +35,7 @@ function parseArgs(argv) {
     dbPath = existsSync(deployed) ? deployed : local;
   }
 
-  return { title: positional.join(' ').trim(), dbPath: path.resolve(dbPath) };
+  return { title: positional.join(' ').trim(), bookId: bookId.trim(), dbPath: path.resolve(dbPath) };
 }
 
 function formatDate(timestamp) {
@@ -70,12 +76,38 @@ function readerRows(db, bookId) {
   `).all(bookId);
 }
 
+function bookDiagnosticQuery(db, whereClause, value) {
+  return db.prepare(`
+    SELECT
+      ba.id,
+      ba.title,
+      ba.author,
+      ba.file_name AS fileName,
+      ba.file_hash AS fileHash,
+      ba.created_at AS createdAt,
+      uploader.name AS uploaderName,
+      uploader.email AS uploaderEmail,
+      COUNT(DISTINCT rp.user_id) AS readers,
+      COUNT(DISTINCT le.user_id) AS libraryEntries,
+      SUM(CASE WHEN le.visibility = 'public' THEN 1 ELSE 0 END) AS publicEntries,
+      MAX(rp.last_opened_at) AS lastOpenedAt
+    FROM book_assets ba
+    LEFT JOIN users uploader ON uploader.id = ba.uploaded_by
+    LEFT JOIN reading_progress rp ON rp.book_id = ba.id
+    LEFT JOIN library_entries le ON le.book_id = ba.id
+    WHERE ${whereClause}
+    GROUP BY ba.id
+    ORDER BY ba.created_at ASC
+  `).all(value);
+}
+
 function printReaders(db, book, { showHeader = true } = {}) {
   const rows = readerRows(db, book.id);
 
   if (showHeader) {
     console.log(`\n${book.title}`);
     console.log(`${book.author}`);
+    console.log(`ID: ${book.id}`);
   }
 
   if (!rows.length) {
@@ -97,7 +129,24 @@ function printReaders(db, book, { showHeader = true } = {}) {
   })));
 }
 
-const { title, dbPath } = parseArgs(process.argv.slice(2));
+function printCandidates(candidates, title) {
+  console.error(`Hay ${candidates.length} libros que coinciden con "${title}". Se muestran los datos para distinguirlos:\n`);
+  console.table(candidates.map((book) => ({
+    ID: book.id,
+    Creado: formatDate(book.createdAt),
+    Lectores: Number(book.readers || 0),
+    'En bibliotecas': Number(book.libraryEntries || 0),
+    Públicos: Number(book.publicEntries || 0),
+    'Última lectura': formatDate(book.lastOpenedAt),
+    Archivo: book.fileName,
+    Hash: String(book.fileHash || '').slice(0, 12),
+  })));
+  console.error('\nEl libro antiguo normalmente será el de fecha de creación más vieja y, si se conservó el progreso, el que tenga lectores.');
+  console.error('Para ver sus lectores:');
+  console.error('  make readers ID="<ID>"');
+}
+
+const { title, bookId, dbPath } = parseArgs(process.argv.slice(2));
 
 if (!existsSync(dbPath)) {
   console.error(`No existe la base de datos: ${dbPath}`);
@@ -107,13 +156,25 @@ if (!existsSync(dbPath)) {
 const db = new DatabaseSync(dbPath, { readOnly: true });
 
 try {
-  if (!title) {
+  if (bookId) {
+    const candidates = bookDiagnosticQuery(db, 'ba.id = ?', bookId);
+    if (!candidates.length) {
+      console.error(`No encontré ningún libro con ID: ${bookId}`);
+      process.exitCode = 3;
+    } else {
+      console.log(`Base: ${dbPath}`);
+      const book = candidates[0];
+      console.log(`Creado: ${formatDate(book.createdAt)} · Bibliotecas: ${Number(book.libraryEntries || 0)} · Público: ${Number(book.publicEntries || 0) > 0 ? 'sí' : 'no'}`);
+      printReaders(db, book);
+    }
+  } else if (!title) {
     const books = db.prepare(`
       SELECT
         ba.id,
         ba.title,
         ba.author,
-        COUNT(rp.user_id) AS readers,
+        ba.created_at AS createdAt,
+        COUNT(DISTINCT rp.user_id) AS readers,
         SUM(CASE WHEN rp.percentage >= 0.01 AND rp.percentage < 0.999 THEN 1 ELSE 0 END) AS reading,
         SUM(CASE WHEN rp.percentage >= 0.999 THEN 1 ELSE 0 END) AS completed,
         SUM(CASE WHEN rp.user_id IS NOT NULL AND rp.percentage < 0.01 THEN 1 ELSE 0 END) AS noProgress,
@@ -132,42 +193,33 @@ try {
       console.log('No hay libros almacenados.');
     } else {
       console.table(books.map((book) => ({
+        ID: book.id,
         Libro: book.title,
         Autor: book.author,
         Lectores: Number(book.readers || 0),
         Leyendo: Number(book.reading || 0),
         Completados: Number(book.completed || 0),
         'Sin avance': Number(book.noProgress || 0),
+        Creado: formatDate(book.createdAt),
         'Última lectura': formatDate(book.lastOpenedAt),
       })));
 
       for (const book of books) {
         console.log(`\n${'='.repeat(72)}`);
         console.log(`${book.title} — ${book.author}`);
+        console.log(`ID: ${book.id}`);
         printReaders(db, book, { showHeader: false });
       }
     }
   } else {
-    const exact = db.prepare(`
-      SELECT id, title, author
-      FROM book_assets
-      WHERE LOWER(title) = LOWER(?)
-      ORDER BY created_at DESC
-    `).all(title);
-
-    const candidates = exact.length ? exact : db.prepare(`
-      SELECT id, title, author
-      FROM book_assets
-      WHERE LOWER(title) LIKE LOWER(?)
-      ORDER BY created_at DESC
-    `).all(`%${title}%`);
+    const exact = bookDiagnosticQuery(db, 'LOWER(ba.title) = LOWER(?)', title);
+    const candidates = exact.length ? exact : bookDiagnosticQuery(db, 'LOWER(ba.title) LIKE LOWER(?)', `%${title}%`);
 
     if (!candidates.length) {
       console.error(`No encontré ningún libro que coincida con: "${title}"`);
       process.exitCode = 3;
     } else if (candidates.length > 1) {
-      console.error(`Hay ${candidates.length} libros que coinciden con "${title}". Usa un título más específico:\n`);
-      for (const book of candidates) console.error(`- ${book.title} — ${book.author}`);
+      printCandidates(candidates, title);
       process.exitCode = 4;
     } else {
       console.log(`Base: ${dbPath}`);
