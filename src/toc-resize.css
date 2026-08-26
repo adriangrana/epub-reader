@@ -1,19 +1,17 @@
 @media (min-width: 901px) {
   .reader-layout {
-    grid-template-columns: var(--luma-toc-width, 260px) minmax(0, 1fr);
-  }
-
-  .toc-panel {
     position: relative;
+    grid-template-columns: var(--luma-toc-width, 260px) minmax(0, 1fr);
   }
 
   .toc-resizer {
     position: absolute;
     top: 0;
-    right: -5px;
+    left: var(--luma-toc-width, 260px);
     bottom: 0;
     z-index: 8;
-    width: 10px;
+    width: 12px;
+    transform: translateX(-50%);
     cursor: col-resize;
     touch-action: none;
     outline: none;
@@ -24,8 +22,9 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 4px;
+    left: 50%;
     width: 2px;
+    transform: translateX(-50%);
     background: transparent;
     transition: background 140ms ease, box-shadow 140ms ease;
   }
