@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import './narration-preferences';
 import './account-password';
+import './toc-resize';
 import './styles.css';
 import './reader-overrides.css';
 import './app-overrides.css';
@@ -16,6 +17,7 @@ import './account-password.css';
 import './sidebar-fixed.css';
 import './epub-replace-modal.css';
 import './cast-narration.css';
+import './toc-resize.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
