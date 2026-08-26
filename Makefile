@@ -1,4 +1,4 @@
-.PHONY: build deploy restart redeploy status logs tunnel-logs readers reset-password
+.PHONY: build deploy restart redeploy status logs tunnel-logs readers reset-password restore-book
 
 DEPLOY_DIR := C:/www/luma
 
@@ -25,7 +25,10 @@ tunnel-logs:
 	runara logs luma-tunnel --err --lines 80
 
 readers:
-	@node scripts/book-readers.mjs $(if $(BOOK),"$(BOOK)",) $(if $(DB),--db "$(DB)",)
+	@node --no-warnings scripts/book-readers.mjs $(if $(BOOK),"$(BOOK)",) $(if $(ID),--id "$(ID)",) $(if $(DB),--db "$(DB)",)
+
+restore-book:
+	@node --no-warnings scripts/restore-book.mjs $(if $(ID),--id "$(ID)",) $(if $(VISIBILITY),--visibility "$(VISIBILITY)",) $(if $(DB),--db "$(DB)",)
 
 reset-password:
 	@node scripts/reset-password.mjs $(if $(EMAIL),--email "$(EMAIL)",) $(if $(DB),--db "$(DB)",)
