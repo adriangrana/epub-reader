@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import './speech-resume-fix';
 import './narration-preferences';
 import './account-password';
 import './toc-resize';
