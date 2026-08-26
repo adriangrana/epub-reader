@@ -50,7 +50,12 @@ function installResizableToc() {
   handle.setAttribute('aria-label', 'Cambiar ancho del índice');
   handle.setAttribute('aria-valuemin', String(MIN_TOC_WIDTH));
   handle.tabIndex = 0;
-  toc.appendChild(handle);
+
+  // Keep the splitter outside the scrolling TOC. If it lives inside .toc-panel,
+  // a visible vertical scrollbar changes the panel's scrollport width and makes
+  // an absolutely-positioned handle appear several pixels left of the real grid
+  // boundary. As a sibling, its position is tied directly to --luma-toc-width.
+  layout.appendChild(handle);
 
   let currentWidth = applyWidth(layout, handle, readSavedWidth());
   let drag: { pointerId: number; startX: number; startWidth: number } | null = null;
