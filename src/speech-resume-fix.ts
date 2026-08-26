@@ -116,7 +116,7 @@ if (!marker.__lumaResumeFix) {
     target.paused = false;
 
     if (!remaining.trim()) {
-      target.onEnd?.call(target.utterance, new Event('end') as SpeechSynthesisEvent);
+      target.onEnd?.call(target.utterance, new Event('end') as unknown as SpeechSynthesisEvent);
       return;
     }
 
