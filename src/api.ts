@@ -25,6 +25,13 @@ export type LibraryBook = {
 
 type ApiErrorBody = { error?: string };
 
+const COVER_SESSION_VERSION = Date.now().toString(36);
+const coverVersions = new Map<string, string>();
+
+function bumpCoverVersion(bookId: string) {
+  coverVersions.set(bookId, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     credentials: 'include',
@@ -151,6 +158,10 @@ export async function updateBookCover(bookId: string, cover: string): Promise<vo
     method: 'PUT',
     body: JSON.stringify({ cover }),
   });
+  // The cover endpoint is cacheable and its path stays stable across revisions.
+  // Change the query version only after a successful write so existing <img>
+  // elements receive a new src on the next React render.
+  bumpCoverVersion(bookId);
 }
 
 export async function shareBook(bookId: string, email: string): Promise<{ alreadyInLibrary?: boolean; recipient?: { name: string; email: string } }> {
@@ -199,7 +210,9 @@ export async function fetchBookData(bookId: string): Promise<ArrayBuffer> {
 }
 
 export function coverUrl(book: Pick<LibraryBook, 'id' | 'hasCover'>): string | undefined {
-  return book.hasCover ? `/api/books/${encodeURIComponent(book.id)}/cover` : undefined;
+  if (!book.hasCover) return undefined;
+  const version = coverVersions.get(book.id) ?? COVER_SESSION_VERSION;
+  return `/api/books/${encodeURIComponent(book.id)}/cover?v=${encodeURIComponent(version)}`;
 }
 
 export function downloadUrl(bookId: string): string {
