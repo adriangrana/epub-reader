@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import './speech-resume-fix';
 import './narration-preferences';
+import './narration-highlight-theme';
 import './account-password';
 import './toc-resize';
 import './remove-book-confirmation';
