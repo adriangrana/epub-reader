@@ -53,8 +53,8 @@ function renderRoundedMarker(document: Document, highlight: unknown) {
     marker.style.color = '#27321c';
     marker.style.boxShadow = '0 0 0 3px #c8f273';
     marker.style.borderRadius = '4px';
-    marker.style.boxDecorationBreak = 'clone';
-    marker.style.webkitBoxDecorationBreak = 'clone';
+    marker.style.setProperty('box-decoration-break', 'clone');
+    marker.style.setProperty('-webkit-box-decoration-break', 'clone');
 
     range.surroundContents(marker);
   } catch {
