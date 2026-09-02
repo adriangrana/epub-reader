@@ -20,10 +20,12 @@ function firstRange(highlight: unknown): Range | null {
   } | null;
 
   try {
-    const iterator = typeof value?.values === 'function'
-      ? value.values()
-      : typeof value?.[Symbol.iterator] === 'function'
-        ? value[Symbol.iterator]()
+    const values = value?.values;
+    const symbolIterator = value?.[Symbol.iterator];
+    const iterator = typeof values === 'function'
+      ? values.call(value)
+      : typeof symbolIterator === 'function'
+        ? symbolIterator.call(value)
         : null;
     if (!iterator) return null;
 
