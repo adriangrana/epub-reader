@@ -1,15 +1,28 @@
 const HIGHLIGHT_NAME = 'luma-narration';
 const MARKER_SELECTOR = 'span[data-luma-narration-word]';
+const activeMarkers = new WeakMap<Document, HTMLElement>();
+
+function unwrapMarker(marker: HTMLElement | null | undefined) {
+  if (!marker) return;
+  const parent = marker.parentNode;
+  if (!parent) {
+    marker.remove();
+    return;
+  }
+  while (marker.firstChild) parent.insertBefore(marker.firstChild, marker);
+  marker.remove();
+}
 
 function unwrapMarkers(document: Document) {
+  const active = activeMarkers.get(document);
+  if (active) {
+    unwrapMarker(active);
+    activeMarkers.delete(document);
+  }
+
+  // Defensive cleanup for markers left by an older renderer version.
   for (const marker of Array.from(document.querySelectorAll<HTMLElement>(MARKER_SELECTOR))) {
-    const parent = marker.parentNode;
-    if (!parent) {
-      marker.remove();
-      continue;
-    }
-    while (marker.firstChild) parent.insertBefore(marker.firstChild, marker);
-    marker.remove();
+    unwrapMarker(marker);
   }
 }
 
@@ -20,13 +33,13 @@ function firstRange(highlight: unknown): Range | null {
   } | null;
 
   try {
-    const values = value?.values;
-    const symbolIterator = value?.[Symbol.iterator];
-    const iterator = typeof values === 'function'
-      ? values.call(value)
-      : typeof symbolIterator === 'function'
-        ? symbolIterator.call(value)
-        : null;
+    let iterator: IterableIterator<unknown> | null = null;
+    if (typeof value?.values === 'function') {
+      iterator = value.values();
+    } else {
+      const iterable = value?.[Symbol.iterator];
+      if (typeof iterable === 'function') iterator = iterable.call(value);
+    }
     if (!iterator) return null;
 
     for (const candidate of iterator) {
@@ -41,7 +54,9 @@ function firstRange(highlight: unknown): Range | null {
 }
 
 function renderRoundedMarker(document: Document, highlight: unknown) {
+  // Only one narration word may be visually active at a time.
   unwrapMarkers(document);
+
   const liveRange = firstRange(highlight);
   if (!liveRange) return;
 
@@ -59,6 +74,7 @@ function renderRoundedMarker(document: Document, highlight: unknown) {
     marker.style.setProperty('-webkit-box-decoration-break', 'clone');
 
     range.surroundContents(marker);
+    activeMarkers.set(document, marker);
   } catch {
     // The CSS Custom Highlight remains as a safe fallback if a malformed EPUB
     // produces a range that cannot be wrapped.
